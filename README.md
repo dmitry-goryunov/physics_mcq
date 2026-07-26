@@ -13,6 +13,7 @@ A Streamlit quiz app built from a 1,022-question physics MCQ bank.
 - Reset progress separately for each topic.
 - Download and restore the correct-answer log as CSV.
 - Cloud-safe progress: no shared or temporary server-side log file.
+- Progress persists in the browser, so closing and reopening the app on the same device restores it automatically.
 
 ## Repository structure
 
@@ -47,4 +48,6 @@ The PDF is about 35 MB. GitHub's website uploader may reject it; use GitHub Desk
 
 ## Progress storage
 
-Community Cloud should not be treated as persistent writable file storage. This app therefore encodes completed-question progress in the current URL and provides a CSV download/import backup. Opening the base app URL without its `progress` query parameter starts with an empty record.
+Community Cloud should not be treated as persistent writable file storage. This app therefore encodes completed-question progress in the current URL and also mirrors it to the browser's local storage. When you reopen the app from its base URL on the same device and browser, the saved progress is restored automatically (the app briefly reloads to re-attach the `progress` code to the URL).
+
+Local storage is per-device and per-browser, so it does not follow you to another device or a private/incognito window. For a portable backup, or to move progress between devices, use the **Download CSV log** button and import it elsewhere.

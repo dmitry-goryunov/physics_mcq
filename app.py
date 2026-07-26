@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import uuid
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from quiz_core import (
     BANK,
@@ -74,6 +76,70 @@ st.markdown(
 )
 
 
+PROGRESS_STORAGE_KEY = "physics_mcq_progress_v1"
+
+
+def restore_progress_from_browser() -> None:
+    """On first load in a tab, seed the URL from browser localStorage.
+
+    Progress is kept in the ``progress`` URL parameter during a session, but
+    that parameter is absent when the app is reopened from its base URL. This
+    reads a previously saved token from localStorage and reloads the page with
+    it, so returning to the app on the same device restores past progress.
+    Guarded by sessionStorage so it runs at most once per tab and never fights
+    an intentional reset later in the same session.
+    """
+    components.html(
+        f"""
+        <script>
+        (function() {{
+          try {{
+            var key = {json.dumps(PROGRESS_STORAGE_KEY)};
+            var flag = "physics_mcq_restore_done";
+            var top = window.parent;
+            if (top.sessionStorage.getItem(flag)) return;
+            top.sessionStorage.setItem(flag, "1");
+            var url = new URL(top.location.href);
+            if (!url.searchParams.get("progress")) {{
+              var saved = top.localStorage.getItem(key);
+              if (saved) {{
+                url.searchParams.set("progress", saved);
+                top.location.replace(url.toString());
+              }}
+            }}
+          }} catch (e) {{}}
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def persist_progress_to_browser(token: str) -> None:
+    """Mirror the current progress token into browser localStorage."""
+    components.html(
+        f"""
+        <script>
+        (function() {{
+          try {{
+            var key = {json.dumps(PROGRESS_STORAGE_KEY)};
+            var token = {json.dumps(token)};
+            if (token) {{
+              window.parent.localStorage.setItem(key, token);
+            }} else {{
+              window.parent.localStorage.removeItem(key);
+            }}
+          }} catch (e) {{}}
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
+restore_progress_from_browser()
+
+
 def read_url_progress() -> set[tuple[str, int]]:
     value = st.query_params.get("progress", "")
     if isinstance(value, list):
@@ -88,6 +154,9 @@ def save_progress(completed: set[tuple[str, int]]) -> None:
     elif "progress" in st.query_params:
         del st.query_params["progress"]
     st.session_state.completed = set(completed)
+    # Mark that progress changed on purpose so the settled run mirrors the new
+    # state to browser storage, including clearing it after a reset.
+    st.session_state.storage_dirty = True
 
 
 def clear_quiz() -> None:
@@ -338,7 +407,19 @@ with st.expander("How cloud progress works"):
     st.write(
         "The app does not modify files in GitHub or write one shared CSV on the "
         "Streamlit server. Correct-answer progress is stored as a compact code in "
-        "the current URL. Download the CSV log for a portable backup, or import it "
-        "on another device."
+        "the current URL and mirrored to this browser's local storage, so it is "
+        "restored automatically when you reopen the app on the same device. "
+        "Download the CSV log for a portable backup, or import it on another device."
     )
     st.code(f"Question bank: {BANK['total_questions']} questions", language=None)
+
+
+# Keep this browser's local storage in sync with the settled progress state so
+# the app restores it after being closed and reopened from its base URL. Only
+# write when there is progress to save, or when a deliberate change (including a
+# reset to zero) needs to be mirrored -- never on the empty pre-restore load,
+# which would otherwise clobber a saved token before it can be restored.
+_completed_now = st.session_state.completed
+_storage_dirty = st.session_state.pop("storage_dirty", False)
+if _completed_now or _storage_dirty:
+    persist_progress_to_browser(encode_progress(_completed_now) if _completed_now else "")
