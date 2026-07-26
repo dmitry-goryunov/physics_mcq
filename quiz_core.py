@@ -4,7 +4,6 @@ import base64
 import csv
 import io
 import json
-import random
 from functools import lru_cache
 from pathlib import Path
 
@@ -97,8 +96,9 @@ def select_unanswered(
         for question in QUESTIONS_BY_TOPIC[topic]
         if (topic, int(question["question_number"])) not in completed
     ]
+    unanswered.sort(key=lambda question: int(question["question_number"]))
     number = min(max(0, int(count)), len(unanswered))
-    return random.sample(unanswered, k=number)
+    return unanswered[:number]
 
 
 def progress_to_csv(completed: set[tuple[str, int]]) -> bytes:
