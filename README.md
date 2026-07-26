@@ -48,6 +48,6 @@ The PDF is about 35 MB. GitHub's website uploader may reject it; use GitHub Desk
 
 ## Progress storage
 
-Community Cloud should not be treated as persistent writable file storage. This app therefore encodes completed-question progress in the current URL and also mirrors it to the browser's local storage. When you reopen the app from its base URL on the same device and browser, the saved progress is restored automatically (the app briefly reloads to re-attach the `progress` code to the URL).
+Community Cloud should not be treated as persistent writable file storage. This app therefore encodes completed-question progress in the current URL and also mirrors it to the browser's local storage (via the `streamlit-local-storage` component). When you reopen the app from its base URL on the same device and browser, the saved progress is read back and restored automatically.
 
 Local storage is per-device and per-browser, so it does not follow you to another device or a private/incognito window. For a portable backup, or to move progress between devices, use the **Download CSV log** button and import it elsewhere.

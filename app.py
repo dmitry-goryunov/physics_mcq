@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import json
 import uuid
 
 import streamlit as st
-import streamlit.components.v1 as components
+from streamlit_local_storage import LocalStorage
 
 from quiz_core import (
     BANK,
@@ -78,66 +77,11 @@ st.markdown(
 
 PROGRESS_STORAGE_KEY = "physics_mcq_progress_v1"
 
-
-def restore_progress_from_browser() -> None:
-    """On first load in a tab, seed the URL from browser localStorage.
-
-    Progress is kept in the ``progress`` URL parameter during a session, but
-    that parameter is absent when the app is reopened from its base URL. This
-    reads a previously saved token from localStorage and reloads the page with
-    it, so returning to the app on the same device restores past progress.
-    Guarded by sessionStorage so it runs at most once per tab and never fights
-    an intentional reset later in the same session.
-    """
-    components.html(
-        f"""
-        <script>
-        (function() {{
-          try {{
-            var key = {json.dumps(PROGRESS_STORAGE_KEY)};
-            var flag = "physics_mcq_restore_done";
-            var top = window.parent;
-            if (top.sessionStorage.getItem(flag)) return;
-            top.sessionStorage.setItem(flag, "1");
-            var url = new URL(top.location.href);
-            if (!url.searchParams.get("progress")) {{
-              var saved = top.localStorage.getItem(key);
-              if (saved) {{
-                url.searchParams.set("progress", saved);
-                top.location.replace(url.toString());
-              }}
-            }}
-          }} catch (e) {{}}
-        }})();
-        </script>
-        """,
-        height=0,
-    )
-
-
-def persist_progress_to_browser(token: str) -> None:
-    """Mirror the current progress token into browser localStorage."""
-    components.html(
-        f"""
-        <script>
-        (function() {{
-          try {{
-            var key = {json.dumps(PROGRESS_STORAGE_KEY)};
-            var token = {json.dumps(token)};
-            if (token) {{
-              window.parent.localStorage.setItem(key, token);
-            }} else {{
-              window.parent.localStorage.removeItem(key);
-            }}
-          }} catch (e) {{}}
-        }})();
-        </script>
-        """,
-        height=0,
-    )
-
-
-restore_progress_from_browser()
+# Bidirectional browser localStorage bridge. Reading happens through the
+# Streamlit component return protocol, so it works inside the sandboxed
+# component iframe (a plain <script> cannot navigate or reliably reach the
+# parent page on Streamlit Community Cloud).
+local_storage = LocalStorage()
 
 
 def read_url_progress() -> set[tuple[str, int]]:
@@ -171,10 +115,24 @@ def clear_quiz() -> None:
 def initialise_state() -> None:
     if "completed" not in st.session_state:
         st.session_state.completed = read_url_progress()
+        # If the URL already carries real progress, treat storage as resolved.
+        st.session_state.ls_restored = bool(st.session_state.completed)
     if "quiz" not in st.session_state:
         clear_quiz()
     if "quiz_topic" not in st.session_state:
         st.session_state.quiz_topic = TOPIC_NAMES[0]
+
+    # One-time restore from browser localStorage. On the first run the browser
+    # has not responded yet (token is None); it then answers and triggers a
+    # rerun, after which the saved token is available and applied.
+    if not st.session_state.get("ls_restored"):
+        token = local_storage.getItem(PROGRESS_STORAGE_KEY)
+        if token:
+            restored = decode_progress(str(token))
+            if restored:
+                st.session_state.completed = restored
+                st.query_params["progress"] = str(token)
+            st.session_state.ls_restored = True
 
 
 @st.cache_data(show_spinner=False, max_entries=256)
@@ -414,12 +372,15 @@ with st.expander("How cloud progress works"):
     st.code(f"Question bank: {BANK['total_questions']} questions", language=None)
 
 
-# Keep this browser's local storage in sync with the settled progress state so
-# the app restores it after being closed and reopened from its base URL. Only
-# write when there is progress to save, or when a deliberate change (including a
-# reset to zero) needs to be mirrored -- never on the empty pre-restore load,
-# which would otherwise clobber a saved token before it can be restored.
-_completed_now = st.session_state.completed
-_storage_dirty = st.session_state.pop("storage_dirty", False)
-if _completed_now or _storage_dirty:
-    persist_progress_to_browser(encode_progress(_completed_now) if _completed_now else "")
+# Mirror a deliberate progress change to browser localStorage so the app can
+# restore it after being closed and reopened from its base URL. Writing only on
+# an actual change (flagged by save_progress) avoids clobbering a saved token
+# during the asynchronous restore on load.
+if st.session_state.pop("storage_dirty", False):
+    _completed_now = st.session_state.completed
+    if _completed_now:
+        local_storage.setItem(
+            PROGRESS_STORAGE_KEY, encode_progress(_completed_now), key="mcq_ls_set"
+        )
+    elif local_storage.getItem(PROGRESS_STORAGE_KEY):
+        local_storage.deleteItem(PROGRESS_STORAGE_KEY, key="mcq_ls_del")
