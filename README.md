@@ -1,6 +1,6 @@
 # Physics MCQ Practice
 
-https://physicsmcq-ipydxtehmwpfsmntfqgljj.streamlit.app/?progress=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+https://physicsmcq-ipydxtehmwpfsmntfqgljj.streamlit.app/
 
 A Streamlit quiz app built from a 1,022-question physics MCQ bank.
 
