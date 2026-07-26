@@ -1,0 +1,308 @@
+from __future__ import annotations
+
+import uuid
+
+import streamlit as st
+
+from quiz_core import (
+    BANK,
+    QUESTION_LOOKUP,
+    QUESTIONS_BY_TOPIC,
+    TOPIC_NAMES,
+    decode_progress,
+    encode_progress,
+    progress_from_csv,
+    progress_to_csv,
+    render_question_part,
+    select_unanswered,
+    topic_state,
+)
+
+
+st.set_page_config(
+    page_title="Physics MCQ Practice",
+    page_icon="⚛️",
+    layout="wide",
+)
+
+st.markdown(
+    """
+    <style>
+    .block-container {padding-top: 1.8rem; padding-bottom: 3rem; max-width: 1400px;}
+    [data-testid="stSidebar"] {min-width: 320px; max-width: 320px;}
+    .question-meta {color: #5d6673; font-size: 0.92rem; margin-bottom: 0.8rem;}
+    .answer-note {color: #5d6673; font-size: 0.9rem;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+def read_url_progress() -> set[tuple[str, int]]:
+    value = st.query_params.get("progress", "")
+    if isinstance(value, list):
+        value = value[-1] if value else ""
+    return decode_progress(str(value))
+
+
+def save_progress(completed: set[tuple[str, int]]) -> None:
+    token = encode_progress(completed)
+    if token:
+        st.query_params["progress"] = token
+    elif "progress" in st.query_params:
+        del st.query_params["progress"]
+    st.session_state.completed = set(completed)
+
+
+def clear_quiz() -> None:
+    st.session_state.quiz = []
+    st.session_state.quiz_position = 0
+    st.session_state.quiz_correct = 0
+    st.session_state.submitted = False
+    st.session_state.feedback = None
+    st.session_state.quiz_nonce = uuid.uuid4().hex
+
+
+def initialise_state() -> None:
+    if "completed" not in st.session_state:
+        st.session_state.completed = read_url_progress()
+    if "quiz" not in st.session_state:
+        clear_quiz()
+    if "quiz_topic" not in st.session_state:
+        st.session_state.quiz_topic = TOPIC_NAMES[0]
+
+
+@st.cache_data(show_spinner=False, max_entries=256)
+def cached_question_image(page_number: int, part: str) -> bytes:
+    return render_question_part(page_number, part)
+
+
+initialise_state()
+completed: set[tuple[str, int]] = st.session_state.completed
+states = topic_state(completed)
+state_lookup = {row["Topic"]: row for row in states}
+
+with st.sidebar:
+    st.header("Quiz setup")
+    selected_topic = st.selectbox(
+        "Topic",
+        TOPIC_NAMES,
+        index=TOPIC_NAMES.index(st.session_state.quiz_topic)
+        if st.session_state.quiz_topic in TOPIC_NAMES
+        else 0,
+    )
+    selected_state = state_lookup[selected_topic]
+    total = selected_state["Total"]
+    correct = selected_state["Correct"]
+    unanswered = selected_state["Unanswered"]
+    st.progress(correct / total if total else 0)
+    st.caption(f"{correct} correct; {unanswered} unanswered; {total} total")
+
+    maximum = max(1, unanswered)
+    question_count = st.number_input(
+        "Number of questions",
+        min_value=1,
+        max_value=maximum,
+        value=min(10, maximum),
+        step=1,
+        disabled=unanswered == 0,
+    )
+
+    if st.button(
+        "Start quiz",
+        type="primary",
+        use_container_width=True,
+        disabled=unanswered == 0,
+    ):
+        selected = select_unanswered(selected_topic, int(question_count), completed)
+        st.session_state.quiz = [
+            (question["topic"], int(question["question_number"]))
+            for question in selected
+        ]
+        st.session_state.quiz_position = 0
+        st.session_state.quiz_correct = 0
+        st.session_state.quiz_topic = selected_topic
+        st.session_state.submitted = False
+        st.session_state.feedback = None
+        st.session_state.quiz_nonce = uuid.uuid4().hex
+        st.rerun()
+
+    if unanswered == 0:
+        st.success("All questions in this topic are recorded as correct.")
+
+    st.divider()
+    st.subheader("Topic reset")
+    st.caption("Removes recorded correct answers only for the selected topic.")
+    confirm_reset = st.checkbox("Confirm reset", key=f"confirm_reset_{selected_topic}")
+    if st.button(
+        "Reset this topic",
+        use_container_width=True,
+        disabled=not confirm_reset or correct == 0,
+    ):
+        remaining = {key for key in completed if key[0] != selected_topic}
+        removed = len(completed) - len(remaining)
+        save_progress(remaining)
+        if st.session_state.quiz_topic == selected_topic:
+            clear_quiz()
+        st.toast(f"Removed {removed} recorded answer(s) from {selected_topic}.")
+        st.rerun()
+
+    st.divider()
+    st.subheader("Correct-answer log")
+    st.download_button(
+        "Download CSV log",
+        data=progress_to_csv(completed),
+        file_name="correct_answers.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    uploaded_log = st.file_uploader(
+        "Restore from a CSV log",
+        type=["csv"],
+        help="Only rows whose answer matches the answer bank are imported.",
+    )
+    if uploaded_log is not None and st.button(
+        "Import log", use_container_width=True
+    ):
+        imported, rejected = progress_from_csv(uploaded_log.getvalue())
+        save_progress(imported)
+        clear_quiz()
+        message = f"Imported {len(imported)} correct answer(s)."
+        if rejected:
+            message += f" Rejected {rejected} invalid row(s)."
+        st.success(message)
+        st.rerun()
+
+    st.caption(
+        "Progress is encoded in this app's URL. Keep the current URL or download "
+        "the CSV log as a backup. No progress is written to a shared cloud file."
+    )
+
+st.title("Physics MCQ Practice")
+st.caption(
+    "Questions are drawn only from those not yet recorded as correct. "
+    "Incorrect attempts are not added to the log."
+)
+
+quiz: list[tuple[str, int]] = st.session_state.quiz
+position = st.session_state.quiz_position
+
+if quiz and position < len(quiz):
+    key = quiz[position]
+    question = QUESTION_LOOKUP[key]
+
+    header_left, header_right = st.columns([4, 1])
+    with header_left:
+        st.subheader(f"{question['topic']} · Question {question['question_number']}")
+        st.markdown(
+            f"<div class='question-meta'>Question {position + 1} of {len(quiz)}</div>",
+            unsafe_allow_html=True,
+        )
+    with header_right:
+        st.metric("Correct this quiz", st.session_state.quiz_correct)
+
+    st.progress((position + 1) / len(quiz))
+
+    question_col, solution_col = st.columns([1.2, 0.8], gap="large")
+
+    with question_col:
+        st.image(
+            cached_question_image(int(question["page"]), "question"),
+            use_container_width=True,
+        )
+
+        answer_key = (
+            f"answer_{st.session_state.quiz_nonce}_{position}_{key[0]}_{key[1]}"
+        )
+        selected_answer = st.radio(
+            "Choose an answer",
+            ["A", "B", "C", "D"],
+            horizontal=True,
+            index=None,
+            key=answer_key,
+            disabled=st.session_state.submitted,
+        )
+
+        submit_col, next_col = st.columns(2)
+        with submit_col:
+            if st.button(
+                "Submit answer",
+                type="primary",
+                use_container_width=True,
+                disabled=selected_answer is None or st.session_state.submitted,
+            ):
+                is_correct = selected_answer == question["correct_answer"]
+                st.session_state.submitted = True
+                if is_correct:
+                    updated = set(completed)
+                    was_new = key not in updated
+                    updated.add(key)
+                    save_progress(updated)
+                    if was_new:
+                        st.session_state.quiz_correct += 1
+                    st.session_state.feedback = (
+                        "success",
+                        f"Correct. The answer is {question['correct_answer']}.",
+                    )
+                else:
+                    st.session_state.feedback = (
+                        "error",
+                        "Incorrect. This question was not recorded and remains unanswered.",
+                    )
+                st.rerun()
+
+        with next_col:
+            if st.button(
+                "Next question" if position + 1 < len(quiz) else "Finish quiz",
+                use_container_width=True,
+                disabled=not st.session_state.submitted,
+            ):
+                st.session_state.quiz_position += 1
+                st.session_state.submitted = False
+                st.session_state.feedback = None
+                st.rerun()
+
+        feedback = st.session_state.feedback
+        if feedback:
+            kind, text = feedback
+            if kind == "success":
+                st.success(text)
+            else:
+                st.error(text)
+
+    with solution_col:
+        show_solution = st.toggle(
+            "Show solution",
+            key=f"solution_{st.session_state.quiz_nonce}_{position}",
+        )
+        if show_solution:
+            st.image(
+                cached_question_image(int(question["page"]), "solution"),
+                use_container_width=True,
+            )
+        else:
+            st.info("Turn on **Show solution** to reveal the source answer page.")
+
+elif quiz and position >= len(quiz):
+    st.success(
+        f"Quiz complete. {st.session_state.quiz_correct} of {len(quiz)} "
+        "questions were newly recorded as correct."
+    )
+    if st.button("Choose another quiz", type="primary"):
+        clear_quiz()
+        st.rerun()
+else:
+    st.info("Choose a topic and number of questions in the sidebar, then start a quiz.")
+
+st.divider()
+st.subheader("Progress by topic")
+st.dataframe(states, hide_index=True, use_container_width=True)
+
+with st.expander("How cloud progress works"):
+    st.write(
+        "The app does not modify files in GitHub or write one shared CSV on the "
+        "Streamlit server. Correct-answer progress is stored as a compact code in "
+        "the current URL. Download the CSV log for a portable backup, or import it "
+        "on another device."
+    )
+    st.code(f"Question bank: {BANK['total_questions']} questions", language=None)

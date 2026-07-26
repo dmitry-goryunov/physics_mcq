@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.DS_Store
+
+# Redundant byte-identical copy of questions.pdf (intermediate source artifact)
+physics_mcq_question_answer_pairs_FLAT_IMAGE_PAGES.pdf
