@@ -32,6 +32,42 @@ st.markdown(
     [data-testid="stSidebar"] {min-width: 320px; max-width: 320px;}
     .question-meta {color: #5d6673; font-size: 0.92rem; margin-bottom: 0.8rem;}
     .answer-note {color: #5d6673; font-size: 0.9rem;}
+
+    /* --- Smartphone layout (portrait phones and small screens) --- */
+    @media (max-width: 640px) {
+        .block-container {
+            padding-top: 1rem;
+            padding-left: 0.8rem;
+            padding-right: 0.8rem;
+            padding-bottom: 2rem;
+        }
+        /* Stack every column row vertically so nothing is squeezed side by side */
+        [data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap !important;
+            gap: 0.5rem !important;
+        }
+        [data-testid="stHorizontalBlock"] > div {
+            flex: 1 1 100% !important;
+            width: 100% !important;
+            min-width: 100% !important;
+        }
+        /* Let the sidebar overlay use the width it needs without overflowing */
+        [data-testid="stSidebar"] {
+            min-width: 85vw !important;
+            max-width: 92vw !important;
+        }
+        /* Bigger tap targets for radio options and buttons */
+        [data-testid="stRadio"] label {
+            padding: 0.15rem 0.4rem;
+            font-size: 1.05rem;
+        }
+        .stButton button {
+            min-height: 2.9rem;
+            font-size: 1.02rem;
+        }
+        h1 {font-size: 1.6rem !important;}
+        h2 {font-size: 1.25rem !important;}
+    }
     </style>
     """,
     unsafe_allow_html=True,
