@@ -155,6 +155,7 @@ def clear_quiz() -> None:
     st.session_state.quiz_correct = 0
     st.session_state.submitted = False
     st.session_state.feedback = None
+    st.session_state.submitted_was_new = False
     st.session_state.quiz_nonce = uuid.uuid4().hex
 
 
@@ -218,7 +219,7 @@ _SCRATCH_PAD_HTML = """
     <span>Scratch pad</span>
     <button id="clearBtn" type="button" style="padding:0.3rem 0.7rem; font-size:0.8rem; font-weight:600; border:1px solid #d8dbe3; border-radius:8px; background:#fff; cursor:pointer;">Clear</button>
   </div>
-  <canvas id="pad" style="display:block; width:100%; height:220px; touch-action:none; cursor:crosshair; background:#fff;"></canvas>
+  <canvas id="pad" style="display:block; width:100%; height:420px; touch-action:none; cursor:crosshair; background:#fff;"></canvas>
 </div>
 <script>
 (function () {
@@ -276,7 +277,7 @@ _SCRATCH_PAD_HTML = """
 
 
 def render_scratch_pad(pad_key: str) -> None:
-    components.html(_SCRATCH_PAD_HTML.replace("__PAD_KEY__", pad_key), height=270)
+    components.html(_SCRATCH_PAD_HTML.replace("__PAD_KEY__", pad_key), height=470)
 
 
 ZOOM_LEVELS = [1.0, 1.5, 2.0, 2.5, 3.0]
@@ -326,19 +327,25 @@ with st.sidebar:
         f"{correct} correct; {incorrect} incorrect; {unanswered} unanswered; {total} total"
     )
 
-    maximum = max(1, unanswered)
+    show_all = st.checkbox(
+        "Show all questions (not just unanswered)",
+        key="show_all_questions",
+    )
+    pool_size = total if show_all else unanswered
+
+    maximum = max(1, pool_size)
     min_number, max_number = question_number_bounds(selected_topic)
 
     selection_mode = st.radio(
         "Select questions by",
         ["Count", "Question range"],
         horizontal=True,
-        disabled=unanswered == 0,
+        disabled=pool_size == 0,
     )
 
     question_count = min(10, maximum)
     range_from, range_to = min_number, max_number
-    range_unanswered = unanswered
+    range_pool = pool_size
 
     if selection_mode == "Count":
         question_count = st.number_input(
@@ -347,7 +354,7 @@ with st.sidebar:
             max_value=maximum,
             value=min(10, maximum),
             step=1,
-            disabled=unanswered == 0,
+            disabled=pool_size == 0,
         )
     else:
         range_col1, range_col2 = st.columns(2)
@@ -358,7 +365,7 @@ with st.sidebar:
                 max_value=max_number,
                 value=min_number,
                 step=1,
-                disabled=unanswered == 0,
+                disabled=pool_size == 0,
             )
         with range_col2:
             range_to = st.number_input(
@@ -367,18 +374,22 @@ with st.sidebar:
                 max_value=max_number,
                 value=max_number,
                 step=1,
-                disabled=unanswered == 0,
+                disabled=pool_size == 0,
             )
-        range_unanswered = sum(
+        range_pool = sum(
             1
             for question in QUESTIONS_BY_TOPIC[selected_topic]
             if range_from <= int(question["question_number"]) <= range_to
-            and (selected_topic, int(question["question_number"])) not in completed
+            and (
+                show_all
+                or (selected_topic, int(question["question_number"])) not in completed
+            )
         )
-        st.caption(f"{range_unanswered} unanswered question(s) in that range.")
+        range_word = "question(s)" if show_all else "unanswered question(s)"
+        st.caption(f"{range_pool} {range_word} in that range.")
 
-    start_disabled = unanswered == 0 or (
-        selection_mode == "Question range" and range_unanswered == 0
+    start_disabled = pool_size == 0 or (
+        selection_mode == "Question range" and range_pool == 0
     )
 
     if st.button(
@@ -388,10 +399,19 @@ with st.sidebar:
         disabled=start_disabled,
     ):
         if selection_mode == "Count":
-            selected = select_unanswered(selected_topic, int(question_count), completed)
+            selected = select_unanswered(
+                selected_topic,
+                int(question_count),
+                completed,
+                include_completed=show_all,
+            )
         else:
             selected = select_unanswered_range(
-                selected_topic, int(range_from), int(range_to), completed
+                selected_topic,
+                int(range_from),
+                int(range_to),
+                completed,
+                include_completed=show_all,
             )
         st.session_state.quiz = [
             (question["topic"], int(question["question_number"]))
@@ -537,6 +557,7 @@ if quiz and position < len(quiz):
                     save_progress(updated)
                     if was_new:
                         st.session_state.quiz_correct += 1
+                    st.session_state.submitted_was_new = was_new
                     st.session_state.feedback = (
                         "success",
                         f"Correct. The answer is {effective_answer}.",
@@ -547,6 +568,7 @@ if quiz and position < len(quiz):
                         updated_incorrect.get(question["topic"], 0) + 1
                     )
                     save_incorrect(updated_incorrect)
+                    st.session_state.submitted_was_new = False
                     st.session_state.feedback = (
                         "error",
                         "Incorrect. This question was not recorded and remains unanswered.",
@@ -562,6 +584,7 @@ if quiz and position < len(quiz):
                 st.session_state.quiz_position += 1
                 st.session_state.submitted = False
                 st.session_state.feedback = None
+                st.session_state.submitted_was_new = False
                 st.rerun()
 
         feedback = st.session_state.feedback
@@ -580,15 +603,34 @@ if quiz and position < len(quiz):
                     save_overrides(updated_overrides)
 
                     updated = set(completed)
+                    was_new = key not in updated
                     updated.add(key)
                     save_progress(updated)
-                    st.session_state.quiz_correct += 1
+                    if was_new:
+                        st.session_state.quiz_correct += 1
+                    st.session_state.submitted_was_new = was_new
                     st.session_state.feedback = (
                         "success",
                         "Marked as correct. The answer key for this question has "
                         f"been corrected to {selected_answer}.",
                     )
                     st.rerun()
+
+            if st.button(
+                "Undo — let me answer again",
+                key=f"undo_{st.session_state.quiz_nonce}_{position}",
+            ):
+                if st.session_state.submitted_was_new:
+                    updated = set(completed)
+                    updated.discard(key)
+                    save_progress(updated)
+                    st.session_state.quiz_correct = max(
+                        0, st.session_state.quiz_correct - 1
+                    )
+                st.session_state.submitted = False
+                st.session_state.feedback = None
+                st.session_state.submitted_was_new = False
+                st.rerun()
 
     with solution_col:
         show_solution = st.toggle(

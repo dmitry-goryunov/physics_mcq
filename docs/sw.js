@@ -1,5 +1,5 @@
 // Keep in sync with app.js's CACHE_NAME.
-const CACHE_NAME = "physics-mcq-cache-v7";
+const CACHE_NAME = "physics-mcq-cache-v8";
 
 const CORE_ASSETS = [
   "./",

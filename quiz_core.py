@@ -168,14 +168,18 @@ def topic_state(
 
 
 def select_unanswered(
-    topic: str, count: int, completed: set[tuple[str, int]]
+    topic: str,
+    count: int,
+    completed: set[tuple[str, int]],
+    include_completed: bool = False,
 ) -> list[dict]:
     if topic not in QUESTIONS_BY_TOPIC:
         raise KeyError(topic)
     unanswered = [
         question
         for question in QUESTIONS_BY_TOPIC[topic]
-        if (topic, int(question["question_number"])) not in completed
+        if include_completed
+        or (topic, int(question["question_number"])) not in completed
     ]
     unanswered.sort(key=lambda question: int(question["question_number"]))
     number = min(max(0, int(count)), len(unanswered))
@@ -190,7 +194,11 @@ def question_number_bounds(topic: str) -> tuple[int, int]:
 
 
 def select_unanswered_range(
-    topic: str, start: int, end: int, completed: set[tuple[str, int]]
+    topic: str,
+    start: int,
+    end: int,
+    completed: set[tuple[str, int]],
+    include_completed: bool = False,
 ) -> list[dict]:
     """Return every unanswered question in [start, end] (inclusive), in order."""
     if topic not in QUESTIONS_BY_TOPIC:
@@ -200,7 +208,10 @@ def select_unanswered_range(
         question
         for question in QUESTIONS_BY_TOPIC[topic]
         if low <= int(question["question_number"]) <= high
-        and (topic, int(question["question_number"])) not in completed
+        and (
+            include_completed
+            or (topic, int(question["question_number"])) not in completed
+        )
     ]
     unanswered.sort(key=lambda question: int(question["question_number"]))
     return unanswered
