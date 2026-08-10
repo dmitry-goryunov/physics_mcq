@@ -3,7 +3,12 @@
 of the question bank and a manifest of every asset the service worker should
 be able to cache for offline use.
 
-Rerun this whenever questions.pdf or questions.json changes:
+Images are rendered from SOURCE_PDF, a higher-quality scan than the
+questions.pdf used by the live Streamlit app. It's too large for GitHub
+(~109 MiB, over the 100 MiB limit) so it's kept local-only (gitignored) and
+must be present next to this script to rerun it.
+
+Rerun this whenever SOURCE_PDF or questions.json changes:
 
     python build_offline_assets.py
 """
@@ -17,12 +22,13 @@ from pathlib import Path
 import fitz
 from PIL import Image
 
-from quiz_core import BANK, PDF_PATH, QUESTIONS, trim_white_space
+from quiz_core import BANK, QUESTIONS, trim_white_space
 
 APP_DIR = Path(__file__).resolve().parent
 DOCS_DIR = APP_DIR / "docs"
 IMG_DIR = DOCS_DIR / "img"
 DATA_DIR = DOCS_DIR / "data"
+SOURCE_PDF = APP_DIR / "physics_mcq_ALL_1022_question_answer_pairs_HQ.pdf"
 
 ZOOM = 4.0
 WEBP_QUALITY = 85
@@ -57,7 +63,7 @@ def build_images() -> list[str]:
     IMG_DIR.mkdir(parents=True, exist_ok=True)
     asset_paths: list[str] = []
 
-    with fitz.open(PDF_PATH) as document:
+    with fitz.open(SOURCE_PDF) as document:
         total = document.page_count
         for index in range(total):
             page_number = index + 1

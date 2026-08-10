@@ -7,3 +7,8 @@ venv/
 
 # Redundant byte-identical copy of questions.pdf (intermediate source artifact)
 physics_mcq_question_answer_pairs_FLAT_IMAGE_PAGES.pdf
+
+# High-resolution source PDF used only to regenerate docs/img/*.webp
+# (build_offline_assets.py). ~109 MiB, over GitHub's 100 MiB file limit, so it
+# stays local-only; the rendered WebP output is what gets committed.
+physics_mcq_ALL_1022_question_answer_pairs_HQ.pdf
