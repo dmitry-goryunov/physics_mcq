@@ -214,26 +214,62 @@ def cached_question_image(page_number: int, part: str) -> bytes:
 # the iframe reloads, clearing the canvas) only when the question changes —
 # it survives reruns from selecting an answer, submitting, etc.
 _SCRATCH_PAD_HTML = """
-<div data-pad-key="__PAD_KEY__" style="border:1px solid #d8dbe3; border-radius:8px; overflow:hidden; font-family:'Segoe UI', system-ui, sans-serif;">
-  <div style="display:flex; justify-content:space-between; align-items:center; padding:0.45rem 0.7rem; background:#f2f3f8; border-bottom:1px solid #d8dbe3; font-size:0.85rem; font-weight:600; color:#5d6673;">
+<div data-pad-key="__PAD_KEY__" style="border:1px solid #d8dbe3; border-radius:8px; overflow:hidden; font-family:'Segoe UI', system-ui, sans-serif; display:flex; flex-direction:column; height:420px; min-height:200px; max-height:900px; resize:vertical;">
+  <div style="display:flex; justify-content:space-between; align-items:center; padding:0.45rem 0.7rem; background:#f2f3f8; border-bottom:1px solid #d8dbe3; font-size:0.85rem; font-weight:600; color:#5d6673; flex-shrink:0;">
     <span>Scratch pad</span>
     <button id="clearBtn" type="button" style="padding:0.3rem 0.7rem; font-size:0.8rem; font-weight:600; border:1px solid #d8dbe3; border-radius:8px; background:#fff; cursor:pointer;">Clear</button>
   </div>
-  <canvas id="pad" style="display:block; width:100%; height:420px; touch-action:none; cursor:crosshair; background:#fff;"></canvas>
+  <canvas id="pad" style="display:block; width:100%; flex:1; min-height:0; touch-action:none; cursor:crosshair; background:#fff;"></canvas>
 </div>
 <script>
 (function () {
   const canvas = document.getElementById("pad");
   const ctx = canvas.getContext("2d");
   const clearBtn = document.getElementById("clearBtn");
-  const rect = canvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.round(rect.width * dpr));
-  canvas.height = Math.max(1, Math.round(rect.height * dpr));
-  ctx.scale(dpr, dpr);
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.strokeStyle = "#1a1a1a";
+  const container = canvas.closest("div[data-pad-key]");
+
+  function sizeCanvas(preserveContent) {
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const newWidth = Math.max(1, Math.round(rect.width * dpr));
+    const newHeight = Math.max(1, Math.round(rect.height * dpr));
+
+    let snapshot = null;
+    if (preserveContent && canvas.width > 0 && canvas.height > 0) {
+      snapshot = document.createElement("canvas");
+      snapshot.width = canvas.width;
+      snapshot.height = canvas.height;
+      snapshot.getContext("2d").drawImage(canvas, 0, 0);
+    }
+
+    canvas.width = newWidth;
+    canvas.height = newHeight;
+    ctx.scale(dpr, dpr);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "#1a1a1a";
+
+    if (snapshot) {
+      ctx.drawImage(snapshot, 0, 0, snapshot.width, snapshot.height, 0, 0, newWidth, newHeight);
+    }
+  }
+
+  sizeCanvas(false);
+
+  // Drag the container's bottom-right corner (native CSS resize:vertical) to
+  // resize; debounce so a live drag doesn't reallocate the canvas every pixel.
+  // Skip the observer's initial callback (fires immediately on observe()) since
+  // sizeCanvas() above already handled that synchronously.
+  let ignoredInitialResize = false;
+  let resizeDebounce = null;
+  new ResizeObserver(() => {
+    if (!ignoredInitialResize) {
+      ignoredInitialResize = true;
+      return;
+    }
+    if (resizeDebounce) clearTimeout(resizeDebounce);
+    resizeDebounce = setTimeout(() => sizeCanvas(true), 60);
+  }).observe(container);
 
   let drawing = false;
   let last = null;
