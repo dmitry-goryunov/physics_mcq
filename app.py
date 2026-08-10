@@ -14,8 +14,10 @@ from quiz_core import (
     encode_progress,
     progress_from_csv,
     progress_to_csv,
+    question_number_bounds,
     render_question_part,
     select_unanswered,
+    select_unanswered_range,
     topic_state,
 )
 
@@ -162,22 +164,72 @@ with st.sidebar:
     st.caption(f"{correct} correct; {unanswered} unanswered; {total} total")
 
     maximum = max(1, unanswered)
-    question_count = st.number_input(
-        "Number of questions",
-        min_value=1,
-        max_value=maximum,
-        value=min(10, maximum),
-        step=1,
+    min_number, max_number = question_number_bounds(selected_topic)
+
+    selection_mode = st.radio(
+        "Select questions by",
+        ["Count", "Question range"],
+        horizontal=True,
         disabled=unanswered == 0,
+    )
+
+    question_count = min(10, maximum)
+    range_from, range_to = min_number, max_number
+    range_unanswered = unanswered
+
+    if selection_mode == "Count":
+        question_count = st.number_input(
+            "Number of questions",
+            min_value=1,
+            max_value=maximum,
+            value=min(10, maximum),
+            step=1,
+            disabled=unanswered == 0,
+        )
+    else:
+        range_col1, range_col2 = st.columns(2)
+        with range_col1:
+            range_from = st.number_input(
+                "From question #",
+                min_value=min_number,
+                max_value=max_number,
+                value=min_number,
+                step=1,
+                disabled=unanswered == 0,
+            )
+        with range_col2:
+            range_to = st.number_input(
+                "To question #",
+                min_value=min_number,
+                max_value=max_number,
+                value=max_number,
+                step=1,
+                disabled=unanswered == 0,
+            )
+        range_unanswered = sum(
+            1
+            for question in QUESTIONS_BY_TOPIC[selected_topic]
+            if range_from <= int(question["question_number"]) <= range_to
+            and (selected_topic, int(question["question_number"])) not in completed
+        )
+        st.caption(f"{range_unanswered} unanswered question(s) in that range.")
+
+    start_disabled = unanswered == 0 or (
+        selection_mode == "Question range" and range_unanswered == 0
     )
 
     if st.button(
         "Start quiz",
         type="primary",
         use_container_width=True,
-        disabled=unanswered == 0,
+        disabled=start_disabled,
     ):
-        selected = select_unanswered(selected_topic, int(question_count), completed)
+        if selection_mode == "Count":
+            selected = select_unanswered(selected_topic, int(question_count), completed)
+        else:
+            selected = select_unanswered_range(
+                selected_topic, int(range_from), int(range_to), completed
+            )
         st.session_state.quiz = [
             (question["topic"], int(question["question_number"]))
             for question in selected

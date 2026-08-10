@@ -101,6 +101,30 @@ def select_unanswered(
     return unanswered[:number]
 
 
+def question_number_bounds(topic: str) -> tuple[int, int]:
+    if topic not in QUESTIONS_BY_TOPIC or not QUESTIONS_BY_TOPIC[topic]:
+        raise KeyError(topic)
+    numbers = [int(question["question_number"]) for question in QUESTIONS_BY_TOPIC[topic]]
+    return min(numbers), max(numbers)
+
+
+def select_unanswered_range(
+    topic: str, start: int, end: int, completed: set[tuple[str, int]]
+) -> list[dict]:
+    """Return every unanswered question in [start, end] (inclusive), in order."""
+    if topic not in QUESTIONS_BY_TOPIC:
+        raise KeyError(topic)
+    low, high = min(int(start), int(end)), max(int(start), int(end))
+    unanswered = [
+        question
+        for question in QUESTIONS_BY_TOPIC[topic]
+        if low <= int(question["question_number"]) <= high
+        and (topic, int(question["question_number"])) not in completed
+    ]
+    unanswered.sort(key=lambda question: int(question["question_number"]))
+    return unanswered
+
+
 def progress_to_csv(completed: set[tuple[str, int]]) -> bytes:
     output = io.StringIO(newline="")
     writer = csv.DictWriter(output, fieldnames=LOG_COLUMNS)
