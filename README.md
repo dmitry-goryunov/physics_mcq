@@ -1,5 +1,7 @@
 # Physics MCQ Practice
 
+https://dmitry-goryunov.github.io/physics_mcq/
+
 https://physicsmcq-ipydxtehmwpfsmntfqgljj.streamlit.app/
 
 A Streamlit quiz app built from a 1,022-question physics MCQ bank. A second,
