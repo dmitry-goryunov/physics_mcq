@@ -344,6 +344,42 @@ button {
   font-size: 0.9rem;
 }
 
+.scratch-pad {
+  margin-top: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.scratch-pad-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.45rem 0.7rem;
+  background: #f2f3f8;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.scratch-pad-clear {
+  width: auto;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.scratch-pad-canvas {
+  display: block;
+  width: 100%;
+  height: 220px;
+  touch-action: none;
+  cursor: crosshair;
+  background: #fff;
+}
+
 .progress-section {
   margin-top: 2rem;
 }

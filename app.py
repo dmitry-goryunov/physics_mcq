@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 
 import streamlit as st
+import streamlit.components.v1 as components
 from streamlit_local_storage import LocalStorage
 
 from quiz_core import (
@@ -140,6 +141,76 @@ def initialise_state() -> None:
 @st.cache_data(show_spinner=False, max_entries=256)
 def cached_question_image(page_number: int, part: str) -> bytes:
     return render_question_part(page_number, part)
+
+
+# The pad key is embedded in the HTML so the component's srcdoc changes (and
+# the iframe reloads, clearing the canvas) only when the question changes —
+# it survives reruns from selecting an answer, submitting, etc.
+_SCRATCH_PAD_HTML = """
+<div data-pad-key="__PAD_KEY__" style="border:1px solid #d8dbe3; border-radius:8px; overflow:hidden; font-family:'Segoe UI', system-ui, sans-serif;">
+  <div style="display:flex; justify-content:space-between; align-items:center; padding:0.45rem 0.7rem; background:#f2f3f8; border-bottom:1px solid #d8dbe3; font-size:0.85rem; font-weight:600; color:#5d6673;">
+    <span>Scratch pad</span>
+    <button id="clearBtn" type="button" style="padding:0.3rem 0.7rem; font-size:0.8rem; font-weight:600; border:1px solid #d8dbe3; border-radius:8px; background:#fff; cursor:pointer;">Clear</button>
+  </div>
+  <canvas id="pad" style="display:block; width:100%; height:220px; touch-action:none; cursor:crosshair; background:#fff;"></canvas>
+</div>
+<script>
+(function () {
+  const canvas = document.getElementById("pad");
+  const ctx = canvas.getContext("2d");
+  const clearBtn = document.getElementById("clearBtn");
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.round(rect.width * dpr));
+  canvas.height = Math.max(1, Math.round(rect.height * dpr));
+  ctx.scale(dpr, dpr);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "#1a1a1a";
+
+  let drawing = false;
+  let last = null;
+
+  function pos(e) {
+    const r = canvas.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+
+  canvas.addEventListener("pointerdown", (e) => {
+    drawing = true;
+    try {
+      canvas.setPointerCapture(e.pointerId);
+    } catch (err) {
+      // Some browsers/input drivers reject capture for a given pointer id;
+      // drawing still works without it, just less reliable outside bounds.
+    }
+    last = pos(e);
+    ctx.lineWidth = Math.max(1.2, (e.pressure || 0.5) * 3.5);
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!drawing) return;
+    const p = pos(e);
+    ctx.lineWidth = Math.max(1.2, (e.pressure || 0.5) * 3.5);
+    ctx.beginPath();
+    ctx.moveTo(last.x, last.y);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    last = p;
+  });
+  ["pointerup", "pointercancel", "pointerleave"].forEach((evt) =>
+    canvas.addEventListener(evt, () => { drawing = false; last = null; })
+  );
+
+  clearBtn.addEventListener("click", () => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  });
+})();
+</script>
+"""
+
+
+def render_scratch_pad(pad_key: str) -> None:
+    components.html(_SCRATCH_PAD_HTML.replace("__PAD_KEY__", pad_key), height=270)
 
 
 initialise_state()
@@ -397,6 +468,8 @@ if quiz and position < len(quiz):
             )
         else:
             st.info("Turn on **Show solution** to reveal the source answer page.")
+
+        render_scratch_pad(f"{question['topic']}_{question['question_number']}")
 
 elif quiz and position >= len(quiz):
     st.success(
