@@ -265,11 +265,25 @@ button {
   margin-top: 1rem;
 }
 
+.resizable-image-box {
+  resize: both;
+  overflow: hidden;
+  width: 100%;
+  height: 300px;
+  min-width: 160px;
+  min-height: 100px;
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #fff;
+  box-sizing: border-box;
+}
+
 .question-image,
 .solution-image {
   width: 100%;
-  border-radius: 8px;
-  border: 1px solid var(--border);
+  height: 100%;
+  object-fit: contain;
   display: block;
   background: #fff;
 }

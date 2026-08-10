@@ -67,7 +67,87 @@ def decode_progress(token: str | None) -> set[tuple[str, int]]:
     return completed
 
 
-def topic_state(completed: set[tuple[str, int]]) -> list[dict]:
+def encode_incorrect_counts(counts: dict[str, int]) -> str:
+    """Encode per-topic incorrect-answer counts as a compact URL-safe token."""
+    trimmed = {topic: count for topic, count in counts.items() if count}
+    if not trimmed:
+        return ""
+    raw = json.dumps(trimmed, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def decode_incorrect_counts(token: str | None) -> dict[str, int]:
+    if not token:
+        return {}
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        topic: count
+        for topic, count in data.items()
+        if topic in TOPIC_NAMES and isinstance(count, int) and count > 0
+    }
+
+
+def encode_answer_overrides(overrides: dict[tuple[str, int], str]) -> str:
+    """Encode per-question answer-key corrections as a compact URL-safe token."""
+    trimmed = {
+        f"{topic}|{number}": answer
+        for (topic, number), answer in overrides.items()
+        if answer in {"A", "B", "C", "D"}
+    }
+    if not trimmed:
+        return ""
+    raw = json.dumps(trimmed, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def decode_answer_overrides(token: str | None) -> dict[tuple[str, int], str]:
+    if not token:
+        return {}
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+
+    result: dict[tuple[str, int], str] = {}
+    for compound_key, answer in data.items():
+        if not isinstance(compound_key, str) or "|" not in compound_key:
+            continue
+        topic, _, number_text = compound_key.rpartition("|")
+        if topic not in TOPIC_NAMES or answer not in {"A", "B", "C", "D"}:
+            continue
+        try:
+            number = int(number_text)
+        except ValueError:
+            continue
+        if (topic, number) in QUESTION_INDEX:
+            result[(topic, number)] = answer
+    return result
+
+
+def effective_correct_answer(
+    question: dict, overrides: dict[tuple[str, int], str]
+) -> str:
+    """The answer graded as correct, honoring a stored answer-key override."""
+    key = (question["topic"], int(question["question_number"]))
+    return overrides.get(key, question["correct_answer"])
+
+
+def topic_state(
+    completed: set[tuple[str, int]],
+    incorrect_counts: dict[str, int] | None = None,
+) -> list[dict]:
+    incorrect_counts = incorrect_counts or {}
     state = []
     for topic in TOPIC_NAMES:
         total = TOPIC_TOTALS[topic]
@@ -79,6 +159,7 @@ def topic_state(completed: set[tuple[str, int]]) -> list[dict]:
             {
                 "Topic": topic,
                 "Correct": correct,
+                "Incorrect": incorrect_counts.get(topic, 0),
                 "Unanswered": total - correct,
                 "Total": total,
             }

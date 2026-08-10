@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import uuid
 
 import streamlit as st
@@ -11,7 +12,12 @@ from quiz_core import (
     QUESTION_LOOKUP,
     QUESTIONS_BY_TOPIC,
     TOPIC_NAMES,
+    decode_answer_overrides,
+    decode_incorrect_counts,
     decode_progress,
+    effective_correct_answer,
+    encode_answer_overrides,
+    encode_incorrect_counts,
     encode_progress,
     progress_from_csv,
     progress_to_csv,
@@ -79,6 +85,8 @@ st.markdown(
 
 
 PROGRESS_STORAGE_KEY = "physics_mcq_progress_v1"
+INCORRECT_STORAGE_KEY = "physics_mcq_incorrect_v1"
+OVERRIDES_STORAGE_KEY = "physics_mcq_overrides_v1"
 
 # Bidirectional browser localStorage bridge. Reading happens through the
 # Streamlit component return protocol, so it works inside the sandboxed
@@ -94,6 +102,20 @@ def read_url_progress() -> set[tuple[str, int]]:
     return decode_progress(str(value))
 
 
+def read_url_incorrect() -> dict[str, int]:
+    value = st.query_params.get("incorrect", "")
+    if isinstance(value, list):
+        value = value[-1] if value else ""
+    return decode_incorrect_counts(str(value))
+
+
+def read_url_overrides() -> dict[tuple[str, int], str]:
+    value = st.query_params.get("overrides", "")
+    if isinstance(value, list):
+        value = value[-1] if value else ""
+    return decode_answer_overrides(str(value))
+
+
 def save_progress(completed: set[tuple[str, int]]) -> None:
     token = encode_progress(completed)
     if token:
@@ -103,6 +125,27 @@ def save_progress(completed: set[tuple[str, int]]) -> None:
     st.session_state.completed = set(completed)
     # Mark that progress changed on purpose so the settled run mirrors the new
     # state to browser storage, including clearing it after a reset.
+    st.session_state.storage_dirty = True
+
+
+def save_incorrect(counts: dict[str, int]) -> None:
+    trimmed = {topic: count for topic, count in counts.items() if count}
+    token = encode_incorrect_counts(trimmed)
+    if token:
+        st.query_params["incorrect"] = token
+    elif "incorrect" in st.query_params:
+        del st.query_params["incorrect"]
+    st.session_state.incorrect_counts = trimmed
+    st.session_state.storage_dirty = True
+
+
+def save_overrides(overrides: dict[tuple[str, int], str]) -> None:
+    token = encode_answer_overrides(overrides)
+    if token:
+        st.query_params["overrides"] = token
+    elif "overrides" in st.query_params:
+        del st.query_params["overrides"]
+    st.session_state.answer_overrides = dict(overrides)
     st.session_state.storage_dirty = True
 
 
@@ -120,6 +163,10 @@ def initialise_state() -> None:
         st.session_state.completed = read_url_progress()
         # If the URL already carries real progress, treat storage as resolved.
         st.session_state.ls_restored = bool(st.session_state.completed)
+    if "incorrect_counts" not in st.session_state:
+        st.session_state.incorrect_counts = read_url_incorrect()
+    if "answer_overrides" not in st.session_state:
+        st.session_state.answer_overrides = read_url_overrides()
     if "quiz" not in st.session_state:
         clear_quiz()
     if "quiz_topic" not in st.session_state:
@@ -135,7 +182,22 @@ def initialise_state() -> None:
             if restored:
                 st.session_state.completed = restored
                 st.query_params["progress"] = str(token)
-            st.session_state.ls_restored = True
+
+        incorrect_token = local_storage.getItem(INCORRECT_STORAGE_KEY)
+        if incorrect_token:
+            restored_incorrect = decode_incorrect_counts(str(incorrect_token))
+            if restored_incorrect:
+                st.session_state.incorrect_counts = restored_incorrect
+                st.query_params["incorrect"] = str(incorrect_token)
+
+        overrides_token = local_storage.getItem(OVERRIDES_STORAGE_KEY)
+        if overrides_token:
+            restored_overrides = decode_answer_overrides(str(overrides_token))
+            if restored_overrides:
+                st.session_state.answer_overrides = restored_overrides
+                st.query_params["overrides"] = str(overrides_token)
+
+        st.session_state.ls_restored = True
 
 
 @st.cache_data(show_spinner=False, max_entries=256)
@@ -213,9 +275,25 @@ def render_scratch_pad(pad_key: str) -> None:
     components.html(_SCRATCH_PAD_HTML.replace("__PAD_KEY__", pad_key), height=270)
 
 
+def render_resizable_image(image_bytes: bytes, alt: str) -> None:
+    """An image in a box with a drag handle (native CSS resize) so it can be
+    sized independently of the fixed layout, e.g. to see more of a large
+    diagram or shrink a simple one."""
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    html = f"""
+    <div style="resize:both; overflow:auto; border:1px solid #e2e5ec; border-radius:8px;
+                background:#fff; width:100%; height:300px; min-width:160px; min-height:100px;
+                max-width:100%; box-sizing:border-box;">
+      <img src="data:image/png;base64,{encoded}" alt="{alt}"
+           style="width:100%; height:100%; object-fit:contain; display:block;" />
+    </div>
+    """
+    components.html(html, height=320, scrolling=True)
+
+
 initialise_state()
 completed: set[tuple[str, int]] = st.session_state.completed
-states = topic_state(completed)
+states = topic_state(completed, st.session_state.incorrect_counts)
 state_lookup = {row["Topic"]: row for row in states}
 
 with st.sidebar:
@@ -230,9 +308,12 @@ with st.sidebar:
     selected_state = state_lookup[selected_topic]
     total = selected_state["Total"]
     correct = selected_state["Correct"]
+    incorrect = selected_state["Incorrect"]
     unanswered = selected_state["Unanswered"]
     st.progress(correct / total if total else 0)
-    st.caption(f"{correct} correct; {unanswered} unanswered; {total} total")
+    st.caption(
+        f"{correct} correct; {incorrect} incorrect; {unanswered} unanswered; {total} total"
+    )
 
     maximum = max(1, unanswered)
     min_number, max_number = question_number_bounds(selected_topic)
@@ -318,16 +399,25 @@ with st.sidebar:
 
     st.divider()
     st.subheader("Topic reset")
-    st.caption("Removes recorded correct answers only for the selected topic.")
+    st.caption(
+        "Removes recorded correct answers and the incorrect count for the "
+        "selected topic."
+    )
     confirm_reset = st.checkbox("Confirm reset", key=f"confirm_reset_{selected_topic}")
     if st.button(
         "Reset this topic",
         use_container_width=True,
-        disabled=not confirm_reset or correct == 0,
+        disabled=not confirm_reset or (correct == 0 and incorrect == 0),
     ):
         remaining = {key for key in completed if key[0] != selected_topic}
         removed = len(completed) - len(remaining)
         save_progress(remaining)
+        remaining_incorrect = {
+            topic: count
+            for topic, count in st.session_state.incorrect_counts.items()
+            if topic != selected_topic
+        }
+        save_incorrect(remaining_incorrect)
         if st.session_state.quiz_topic == selected_topic:
             clear_quiz()
         st.toast(f"Removed {removed} recorded answer(s) from {selected_topic}.")
@@ -392,9 +482,9 @@ if quiz and position < len(quiz):
     question_col, solution_col = st.columns([1.2, 0.8], gap="large")
 
     with question_col:
-        st.image(
+        render_resizable_image(
             cached_question_image(int(question["page"]), "question"),
-            use_container_width=True,
+            f"Question {question['question_number']}",
         )
 
         answer_key = (
@@ -417,7 +507,10 @@ if quiz and position < len(quiz):
                 use_container_width=True,
                 disabled=selected_answer is None or st.session_state.submitted,
             ):
-                is_correct = selected_answer == question["correct_answer"]
+                effective_answer = effective_correct_answer(
+                    question, st.session_state.answer_overrides
+                )
+                is_correct = selected_answer == effective_answer
                 st.session_state.submitted = True
                 if is_correct:
                     updated = set(completed)
@@ -428,9 +521,14 @@ if quiz and position < len(quiz):
                         st.session_state.quiz_correct += 1
                     st.session_state.feedback = (
                         "success",
-                        f"Correct. The answer is {question['correct_answer']}.",
+                        f"Correct. The answer is {effective_answer}.",
                     )
                 else:
+                    updated_incorrect = dict(st.session_state.incorrect_counts)
+                    updated_incorrect[question["topic"]] = (
+                        updated_incorrect.get(question["topic"], 0) + 1
+                    )
+                    save_incorrect(updated_incorrect)
                     st.session_state.feedback = (
                         "error",
                         "Incorrect. This question was not recorded and remains unanswered.",
@@ -455,6 +553,24 @@ if quiz and position < len(quiz):
                 st.success(text)
             else:
                 st.error(text)
+                if st.button(
+                    f"I'm right — the answer key is wrong (mark {selected_answer} as correct)",
+                    key=f"override_{st.session_state.quiz_nonce}_{position}",
+                ):
+                    updated_overrides = dict(st.session_state.answer_overrides)
+                    updated_overrides[key] = selected_answer
+                    save_overrides(updated_overrides)
+
+                    updated = set(completed)
+                    updated.add(key)
+                    save_progress(updated)
+                    st.session_state.quiz_correct += 1
+                    st.session_state.feedback = (
+                        "success",
+                        "Marked as correct. The answer key for this question has "
+                        f"been corrected to {selected_answer}.",
+                    )
+                    st.rerun()
 
     with solution_col:
         show_solution = st.toggle(
@@ -462,12 +578,20 @@ if quiz and position < len(quiz):
             key=f"solution_{st.session_state.quiz_nonce}_{position}",
         )
         if show_solution:
-            st.image(
+            render_resizable_image(
                 cached_question_image(int(question["page"]), "solution"),
-                use_container_width=True,
+                f"Solution {question['question_number']}",
             )
         else:
             st.info("Turn on **Show solution** to reveal the source answer page.")
+
+        override_answer = st.session_state.answer_overrides.get(key)
+        if override_answer:
+            st.caption(
+                f"Note: you've corrected this question's answer key to "
+                f"**{override_answer}** (overrides the answer shown in the "
+                "solution image above)."
+            )
 
         render_scratch_pad(f"{question['topic']}_{question['question_number']}")
 
@@ -489,10 +613,13 @@ st.dataframe(states, hide_index=True, use_container_width=True)
 with st.expander("How cloud progress works"):
     st.write(
         "The app does not modify files in GitHub or write one shared CSV on the "
-        "Streamlit server. Correct-answer progress is stored as a compact code in "
-        "the current URL and mirrored to this browser's local storage, so it is "
+        "Streamlit server. Correct-answer progress, per-topic incorrect counts, "
+        "and any answer-key corrections are stored as compact codes in the "
+        "current URL and mirrored to this browser's local storage, so they're "
         "restored automatically when you reopen the app on the same device. "
-        "Download the CSV log for a portable backup, or import it on another device."
+        "Download the CSV log for a portable backup of correct answers, or "
+        "import it on another device (incorrect counts and answer-key "
+        "corrections aren't included in that backup)."
     )
     st.code(f"Question bank: {BANK['total_questions']} questions", language=None)
 
@@ -509,3 +636,23 @@ if st.session_state.pop("storage_dirty", False):
         )
     elif local_storage.getItem(PROGRESS_STORAGE_KEY):
         local_storage.deleteItem(PROGRESS_STORAGE_KEY, key="mcq_ls_del")
+
+    _incorrect_now = st.session_state.incorrect_counts
+    if _incorrect_now:
+        local_storage.setItem(
+            INCORRECT_STORAGE_KEY,
+            encode_incorrect_counts(_incorrect_now),
+            key="mcq_ls_set_incorrect",
+        )
+    elif local_storage.getItem(INCORRECT_STORAGE_KEY):
+        local_storage.deleteItem(INCORRECT_STORAGE_KEY, key="mcq_ls_del_incorrect")
+
+    _overrides_now = st.session_state.answer_overrides
+    if _overrides_now:
+        local_storage.setItem(
+            OVERRIDES_STORAGE_KEY,
+            encode_answer_overrides(_overrides_now),
+            key="mcq_ls_set_overrides",
+        )
+    elif local_storage.getItem(OVERRIDES_STORAGE_KEY):
+        local_storage.deleteItem(OVERRIDES_STORAGE_KEY, key="mcq_ls_del_overrides")
