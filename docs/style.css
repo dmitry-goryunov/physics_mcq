@@ -1,0 +1,413 @@
+:root {
+  color-scheme: light;
+  --bg: #f7f8fb;
+  --panel: #ffffff;
+  --border: #e2e5ec;
+  --text: #1f2430;
+  --muted: #5d6673;
+  --primary: #4f46e5;
+  --primary-dark: #3f37c9;
+  --success-bg: #e8f6ee;
+  --success-text: #1c7a44;
+  --error-bg: #fdeceb;
+  --error-text: #b3261e;
+  --radius: 10px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 1.6rem 1.4rem 3rem;
+}
+
+.app-header h1 {
+  margin: 0 0 0.3rem;
+  font-size: 1.9rem;
+}
+
+.subtitle {
+  color: var(--muted);
+  margin: 0;
+  max-width: 60ch;
+}
+
+.banner {
+  margin-top: 0.9rem;
+  padding: 0.6rem 0.9rem;
+  border-radius: var(--radius);
+  font-size: 0.92rem;
+}
+
+.banner-hidden {
+  display: none;
+}
+
+.banner-info {
+  background: #eef1fd;
+  color: #33399e;
+}
+
+.banner-progress {
+  background: #fff6e0;
+  color: #8a6100;
+}
+
+.banner-success {
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 1.6rem;
+  margin-top: 1.4rem;
+  align-items: start;
+}
+
+.sidebar,
+.main {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.2rem;
+}
+
+.sidebar h2,
+.main h2 {
+  margin-top: 0;
+  font-size: 1.1rem;
+}
+
+.field {
+  margin-bottom: 1rem;
+}
+
+.field label {
+  display: block;
+  font-weight: 600;
+  font-size: 0.88rem;
+  margin-bottom: 0.3rem;
+}
+
+select,
+input[type="number"] {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 1rem;
+  background: #fff;
+  color: var(--text);
+}
+
+.progress-bar {
+  height: 10px;
+  border-radius: 6px;
+  background: #eceff5;
+  overflow: hidden;
+  margin: 0.4rem 0;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--primary);
+}
+
+.caption {
+  color: var(--muted);
+  font-size: 0.88rem;
+  margin: 0.2rem 0 0.8rem;
+}
+
+.mode-row {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 0.8rem;
+}
+
+.mode-row label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 500;
+  font-size: 0.92rem;
+  cursor: pointer;
+}
+
+.range-row {
+  display: flex;
+  gap: 0.7rem;
+}
+
+.range-row .field {
+  flex: 1;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+.btn {
+  display: inline-block;
+  width: 100%;
+  padding: 0.62rem 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text);
+  font-weight: 600;
+  font-size: 0.96rem;
+  text-align: center;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.btn-primary:not(:disabled):hover {
+  background: var(--primary-dark);
+}
+
+.btn-row {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.2rem 0;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.9rem;
+  margin-bottom: 0.6rem;
+}
+
+.success-note {
+  background: var(--success-bg);
+  color: var(--success-text);
+  padding: 0.6rem 0.8rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.file-input {
+  width: 100%;
+  margin-bottom: 0.6rem;
+  font-size: 0.86rem;
+}
+
+.empty-state {
+  color: var(--muted);
+  padding: 2.5rem 1rem;
+  text-align: center;
+  font-size: 1.02rem;
+}
+
+.quiz-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.quiz-header h2 {
+  margin-bottom: 0.15rem;
+}
+
+.question-meta {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.metric {
+  text-align: right;
+}
+
+.metric .value {
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.metric .label {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.quiz-body {
+  display: grid;
+  grid-template-columns: 1.2fr 0.8fr;
+  gap: 1.6rem;
+  margin-top: 1rem;
+}
+
+.question-image,
+.solution-image {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  display: block;
+  background: #fff;
+}
+
+.answer-choices {
+  display: flex;
+  gap: 0.6rem;
+  margin: 1rem 0;
+  flex-wrap: wrap;
+}
+
+.answer-choice {
+  flex: 1 1 auto;
+  min-width: 3.2rem;
+}
+
+.answer-choice input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.answer-choice label {
+  display: block;
+  text-align: center;
+  padding: 0.7rem 0.4rem;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 1.05rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.answer-choice input:checked + label {
+  border-color: var(--primary);
+  background: #eef1fd;
+  color: var(--primary-dark);
+}
+
+.answer-choice input:disabled + label {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.feedback {
+  margin-top: 0.9rem;
+  padding: 0.65rem 0.9rem;
+  border-radius: 8px;
+  font-size: 0.94rem;
+}
+
+.feedback-success {
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.feedback-error {
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+
+.solution-toggle {
+  margin-bottom: 0.8rem;
+}
+
+.solution-placeholder {
+  background: #eef1fd;
+  color: #33399e;
+  padding: 0.7rem 0.9rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.progress-section {
+  margin-top: 2rem;
+}
+
+table.progress-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  font-size: 0.92rem;
+}
+
+table.progress-table th,
+table.progress-table td {
+  padding: 0.55rem 0.8rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+table.progress-table tr:last-child td {
+  border-bottom: none;
+}
+
+table.progress-table th {
+  background: #f2f3f8;
+  font-weight: 600;
+}
+
+.offline-progress {
+  margin-top: 0.5rem;
+}
+
+.offline-progress .progress-bar {
+  margin-bottom: 0.3rem;
+}
+
+@media (max-width: 860px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .quiz-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .app {
+    padding: 1rem 0.8rem 2rem;
+  }
+
+  .app-header h1 {
+    font-size: 1.5rem;
+  }
+
+  .btn {
+    min-height: 2.9rem;
+    font-size: 1.02rem;
+  }
+
+  .answer-choice label {
+    font-size: 1.15rem;
+    padding: 0.9rem 0.4rem;
+  }
+}

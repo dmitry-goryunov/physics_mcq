@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Physics MCQ Practice</title>
+  <meta name="description" content="Offline physics multiple-choice practice, organized by topic." />
+  <meta name="theme-color" content="#4F46E5" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <h1>Physics MCQ Practice</h1>
+      <p class="subtitle">
+        Questions are drawn only from those not yet recorded as correct. Incorrect
+        attempts are not added to the log. Works fully offline once installed.
+      </p>
+      <div id="offline-banner" class="banner banner-hidden" role="status"></div>
+    </header>
+
+    <div class="layout">
+      <aside id="sidebar" class="sidebar"></aside>
+      <main id="main" class="main"></main>
+    </div>
+
+    <section class="progress-section">
+      <h2>Progress by topic</h2>
+      <div id="progress-table"></div>
+    </section>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
