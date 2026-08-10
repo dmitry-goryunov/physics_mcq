@@ -167,6 +167,10 @@ def initialise_state() -> None:
         st.session_state.incorrect_counts = read_url_incorrect()
     if "answer_overrides" not in st.session_state:
         st.session_state.answer_overrides = read_url_overrides()
+    if "question_zoom" not in st.session_state:
+        st.session_state.question_zoom = 1.0
+    if "solution_zoom" not in st.session_state:
+        st.session_state.solution_zoom = 1.0
     if "quiz" not in st.session_state:
         clear_quiz()
     if "quiz_topic" not in st.session_state:
@@ -275,20 +279,27 @@ def render_scratch_pad(pad_key: str) -> None:
     components.html(_SCRATCH_PAD_HTML.replace("__PAD_KEY__", pad_key), height=270)
 
 
-def render_resizable_image(image_bytes: bytes, alt: str) -> None:
-    """An image in a box with a drag handle (native CSS resize) so it can be
-    sized independently of the fixed layout, e.g. to see more of a large
-    diagram or shrink a simple one."""
+ZOOM_LEVELS = [1.0, 1.5, 2.0, 2.5, 3.0]
+BASE_IMAGE_HEIGHT = 300
+
+
+def render_resizable_image(image_bytes: bytes, alt: str, zoom: float) -> None:
+    """An image sized as a multiple of its base box (see ZOOM_LEVELS), in a
+    horizontally scrollable strip so zooming past 1x doesn't distort the
+    surrounding layout."""
     encoded = base64.b64encode(image_bytes).decode("ascii")
+    width_pct = round(zoom * 100)
+    height_px = round(BASE_IMAGE_HEIGHT * zoom)
     html = f"""
-    <div style="resize:both; overflow:auto; border:1px solid #e2e5ec; border-radius:8px;
-                background:#fff; width:100%; height:300px; min-width:160px; min-height:100px;
-                max-width:100%; box-sizing:border-box;">
-      <img src="data:image/png;base64,{encoded}" alt="{alt}"
-           style="width:100%; height:100%; object-fit:contain; display:block;" />
+    <div style="width:100%; overflow-x:auto; overflow-y:hidden; border-radius:8px;">
+      <div style="width:{width_pct}%; height:{height_px}px; min-width:160px; min-height:100px;
+                  border:1px solid #e2e5ec; border-radius:8px; background:#fff; box-sizing:border-box;">
+        <img src="data:image/png;base64,{encoded}" alt="{alt}"
+             style="width:100%; height:100%; object-fit:contain; display:block;" />
+      </div>
     </div>
     """
-    components.html(html, height=320, scrolling=True)
+    components.html(html, height=height_px + 20, scrolling=True)
 
 
 initialise_state()
@@ -482,9 +493,16 @@ if quiz and position < len(quiz):
     question_col, solution_col = st.columns([1.2, 0.8], gap="large")
 
     with question_col:
+        st.select_slider(
+            "Zoom",
+            options=ZOOM_LEVELS,
+            format_func=lambda x: f"{x:g}×",
+            key="question_zoom",
+        )
         render_resizable_image(
             cached_question_image(int(question["page"]), "question"),
             f"Question {question['question_number']}",
+            st.session_state.question_zoom,
         )
 
         answer_key = (
@@ -578,9 +596,16 @@ if quiz and position < len(quiz):
             key=f"solution_{st.session_state.quiz_nonce}_{position}",
         )
         if show_solution:
+            st.select_slider(
+                "Zoom",
+                options=ZOOM_LEVELS,
+                format_func=lambda x: f"{x:g}×",
+                key="solution_zoom",
+            )
             render_resizable_image(
                 cached_question_image(int(question["page"]), "solution"),
                 f"Solution {question['question_number']}",
+                st.session_state.solution_zoom,
             )
         else:
             st.info("Turn on **Show solution** to reveal the source answer page.")

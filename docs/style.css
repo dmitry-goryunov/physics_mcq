@@ -265,14 +265,37 @@ button {
   margin-top: 1rem;
 }
 
-.resizable-image-box {
-  resize: both;
-  overflow: hidden;
+.image-zoom-bar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.image-zoom-bar select {
+  width: auto;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: #fff;
+  color: var(--text);
+}
+
+.image-zoom-wrap {
   width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-radius: 8px;
+}
+
+.resizable-image-box {
   height: 300px;
   min-width: 160px;
   min-height: 100px;
-  max-width: 100%;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: #fff;
