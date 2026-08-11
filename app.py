@@ -82,6 +82,7 @@ st.markdown(
 PROGRESS_STORAGE_KEY = "physics_mcq_progress_v1"
 INCORRECT_STORAGE_KEY = "physics_mcq_incorrect_v1"
 OVERRIDES_STORAGE_KEY = "physics_mcq_overrides_v1"
+FLAGGED_STORAGE_KEY = "physics_mcq_flagged_v1"
 
 # Bidirectional browser localStorage bridge. Reading happens through the
 # Streamlit component return protocol, so it works inside the sandboxed
@@ -109,6 +110,15 @@ def read_url_overrides() -> dict[tuple[str, int], str]:
     if isinstance(value, list):
         value = value[-1] if value else ""
     return decode_answer_overrides(str(value))
+
+
+def read_url_flagged() -> set[tuple[str, int]]:
+    value = st.query_params.get("flagged", "")
+    if isinstance(value, list):
+        value = value[-1] if value else ""
+    # Flags are just another set of question keys, so they reuse the same
+    # compact bitset codec as completed-question progress.
+    return decode_progress(str(value))
 
 
 def save_progress(completed: set[tuple[str, int]]) -> None:
@@ -144,6 +154,16 @@ def save_overrides(overrides: dict[tuple[str, int], str]) -> None:
     st.session_state.storage_dirty = True
 
 
+def save_flags(flagged: set[tuple[str, int]]) -> None:
+    token = encode_progress(flagged)
+    if token:
+        st.query_params["flagged"] = token
+    elif "flagged" in st.query_params:
+        del st.query_params["flagged"]
+    st.session_state.flagged = set(flagged)
+    st.session_state.storage_dirty = True
+
+
 def clear_quiz() -> None:
     st.session_state.quiz = []
     st.session_state.quiz_position = 0
@@ -163,6 +183,8 @@ def initialise_state() -> None:
         st.session_state.incorrect_counts = read_url_incorrect()
     if "answer_overrides" not in st.session_state:
         st.session_state.answer_overrides = read_url_overrides()
+    if "flagged" not in st.session_state:
+        st.session_state.flagged = read_url_flagged()
     if "question_zoom" not in st.session_state:
         st.session_state.question_zoom = 1.0
     if "solution_zoom" not in st.session_state:
@@ -196,6 +218,13 @@ def initialise_state() -> None:
             if restored_overrides:
                 st.session_state.answer_overrides = restored_overrides
                 st.query_params["overrides"] = str(overrides_token)
+
+        flagged_token = local_storage.getItem(FLAGGED_STORAGE_KEY)
+        if flagged_token:
+            restored_flagged = decode_progress(str(flagged_token))
+            if restored_flagged:
+                st.session_state.flagged = restored_flagged
+                st.query_params["flagged"] = str(flagged_token)
 
         st.session_state.ls_restored = True
 
@@ -504,6 +533,33 @@ with st.expander(
         st.success("All questions in this topic are recorded as correct.")
 
     st.divider()
+    st.subheader("Flagged questions")
+    flagged_count = len(st.session_state.flagged)
+    st.caption(f"{flagged_count} question(s) flagged for review.")
+    if st.button(
+        "Review flagged questions",
+        use_container_width=True,
+        disabled=flagged_count == 0,
+    ):
+        flagged_questions = [
+            question
+            for topic in TOPIC_NAMES
+            for question in QUESTIONS_BY_TOPIC[topic]
+            if (topic, int(question["question_number"])) in st.session_state.flagged
+        ]
+        st.session_state.quiz = [
+            (question["topic"], int(question["question_number"]))
+            for question in flagged_questions
+        ]
+        st.session_state.quiz_position = 0
+        st.session_state.quiz_correct = 0
+        st.session_state.submitted = False
+        st.session_state.feedback = None
+        st.session_state.quiz_nonce = uuid.uuid4().hex
+        st.session_state.quiz_setup_generation += 1
+        st.rerun()
+
+    st.divider()
     st.subheader("Topic reset")
     st.caption(
         "Removes recorded correct answers and the incorrect count for the "
@@ -582,6 +638,19 @@ if quiz and position < len(quiz):
         )
     with header_right:
         st.metric("Correct this quiz", st.session_state.quiz_correct)
+        is_flagged = key in st.session_state.flagged
+        if st.button(
+            "🚩 Flagged" if is_flagged else "🏳️ Flag question",
+            key=f"flag_{st.session_state.quiz_nonce}_{position}",
+            use_container_width=True,
+        ):
+            updated_flags = set(st.session_state.flagged)
+            if is_flagged:
+                updated_flags.discard(key)
+            else:
+                updated_flags.add(key)
+            save_flags(updated_flags)
+            st.rerun()
 
     st.progress((position + 1) / len(quiz))
 
@@ -819,3 +888,13 @@ if st.session_state.pop("storage_dirty", False):
         )
     elif local_storage.getItem(OVERRIDES_STORAGE_KEY):
         local_storage.deleteItem(OVERRIDES_STORAGE_KEY, key="mcq_ls_del_overrides")
+
+    _flagged_now = st.session_state.flagged
+    if _flagged_now:
+        local_storage.setItem(
+            FLAGGED_STORAGE_KEY,
+            encode_progress(_flagged_now),
+            key="mcq_ls_set_flagged",
+        )
+    elif local_storage.getItem(FLAGGED_STORAGE_KEY):
+        local_storage.deleteItem(FLAGGED_STORAGE_KEY, key="mcq_ls_del_flagged")

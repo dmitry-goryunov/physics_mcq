@@ -284,6 +284,20 @@ button {
   font-size: 0.8rem;
 }
 
+.flag-toggle {
+  width: auto;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-top: 0.5rem;
+}
+
+.flag-toggle-active {
+  background: #fff6e0;
+  border-color: #e8b923;
+  color: #8a6100;
+}
+
 .quiz-body {
   display: grid;
   grid-template-columns: 1.2fr 0.8fr;
