@@ -339,7 +339,17 @@ completed: set[tuple[str, int]] = st.session_state.completed
 states = topic_state(completed, st.session_state.incorrect_counts)
 state_lookup = {row["Topic"]: row for row in states}
 
-with st.expander("Quiz setup", expanded=False):
+# An expander's open/closed state is sticky to its key once mounted — even
+# reassigning st.session_state[key] doesn't re-collapse it. "Start quiz"
+# bumps this counter instead, forcing a fresh-mounted (collapsed) instance.
+if "quiz_setup_generation" not in st.session_state:
+    st.session_state.quiz_setup_generation = 0
+
+with st.expander(
+    "Quiz setup",
+    expanded=False,
+    key=f"quiz_setup_expanded_{st.session_state.quiz_setup_generation}",
+):
     selected_topic = st.selectbox(
         "Topic",
         TOPIC_NAMES,
@@ -487,6 +497,7 @@ with st.expander("Quiz setup", expanded=False):
         st.session_state.submitted = False
         st.session_state.feedback = None
         st.session_state.quiz_nonce = uuid.uuid4().hex
+        st.session_state.quiz_setup_generation += 1
         st.rerun()
 
     if unanswered == 0:
@@ -739,7 +750,28 @@ else:
 
 st.divider()
 st.subheader("Progress by topic")
-st.dataframe(states, hide_index=True, use_container_width=True)
+_all_topics_row = {
+    "Topic": "All topics",
+    "Correct": sum(row["Correct"] for row in states),
+    "Incorrect": sum(row["Incorrect"] for row in states),
+    "Unanswered": sum(row["Unanswered"] for row in states),
+    "Total": sum(row["Total"] for row in states),
+}
+_progress_rows = [_all_topics_row, *states]
+for _row in _progress_rows:
+    _row["% Complete"] = (
+        round(_row["Correct"] / _row["Total"] * 100) if _row["Total"] else 0
+    )
+st.dataframe(
+    _progress_rows,
+    hide_index=True,
+    use_container_width=True,
+    column_config={
+        "% Complete": st.column_config.ProgressColumn(
+            "% Complete", format="%d%%", min_value=0, max_value=100
+        )
+    },
+)
 
 with st.expander("How cloud progress works"):
     st.write(

@@ -488,6 +488,34 @@ table.progress-table th {
   font-weight: 600;
 }
 
+.progress-table-total {
+  font-weight: 600;
+  background: #f7f8fb;
+}
+
+.progress-table-total td {
+  border-bottom: 2px solid var(--border) !important;
+}
+
+.progress-table-pct {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 120px;
+}
+
+.progress-table-pct .progress-bar {
+  flex: 1;
+  margin: 0;
+}
+
+.progress-table-pct span {
+  font-size: 0.85rem;
+  color: var(--muted);
+  min-width: 2.4em;
+  text-align: right;
+}
+
 .offline-progress {
   margin-top: 0.5rem;
 }
