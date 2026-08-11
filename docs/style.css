@@ -69,11 +69,10 @@ body {
 }
 
 .layout {
-  display: grid;
-  grid-template-columns: 320px 1fr;
+  display: flex;
+  flex-direction: column;
   gap: 1.6rem;
   margin-top: 1.4rem;
-  align-items: start;
 }
 
 .sidebar,
@@ -110,12 +109,6 @@ body {
   line-height: 1.4;
   cursor: pointer;
   color: var(--muted);
-}
-
-@media (min-width: 861px) {
-  .layout.sidebar-collapsed {
-    grid-template-columns: 1fr;
-  }
 }
 
 .layout.sidebar-collapsed .sidebar {
@@ -165,7 +158,8 @@ input[type="number"] {
 
 .mode-row {
   display: flex;
-  gap: 1rem;
+  flex-wrap: wrap;
+  gap: 0.6rem 1rem;
   margin-bottom: 0.8rem;
 }
 
@@ -503,10 +497,6 @@ table.progress-table th {
 }
 
 @media (max-width: 860px) {
-  .layout {
-    grid-template-columns: 1fr;
-  }
-
   .quiz-body {
     grid-template-columns: 1fr;
   }

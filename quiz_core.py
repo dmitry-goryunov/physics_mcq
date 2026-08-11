@@ -4,6 +4,7 @@ import base64
 import csv
 import io
 import json
+import random
 from functools import lru_cache
 from pathlib import Path
 
@@ -172,6 +173,7 @@ def select_unanswered(
     count: int,
     completed: set[tuple[str, int]],
     include_completed: bool = False,
+    randomize: bool = False,
 ) -> list[dict]:
     if topic not in QUESTIONS_BY_TOPIC:
         raise KeyError(topic)
@@ -181,9 +183,29 @@ def select_unanswered(
         if include_completed
         or (topic, int(question["question_number"])) not in completed
     ]
-    unanswered.sort(key=lambda question: int(question["question_number"]))
+    if randomize:
+        random.shuffle(unanswered)
+    else:
+        unanswered.sort(key=lambda question: int(question["question_number"]))
     number = min(max(0, int(count)), len(unanswered))
     return unanswered[:number]
+
+
+def select_all_topics(
+    count: int,
+    completed: set[tuple[str, int]],
+    include_completed: bool = False,
+) -> list[dict]:
+    """Randomly pick questions from across every topic (not just one)."""
+    pool = [
+        question
+        for question in QUESTIONS
+        if include_completed
+        or (question["topic"], int(question["question_number"])) not in completed
+    ]
+    random.shuffle(pool)
+    number = min(max(0, int(count)), len(pool))
+    return pool[:number]
 
 
 def question_number_bounds(topic: str) -> tuple[int, int]:
@@ -199,8 +221,9 @@ def select_unanswered_range(
     end: int,
     completed: set[tuple[str, int]],
     include_completed: bool = False,
+    randomize: bool = False,
 ) -> list[dict]:
-    """Return every unanswered question in [start, end] (inclusive), in order."""
+    """Return every unanswered question in [start, end] (inclusive)."""
     if topic not in QUESTIONS_BY_TOPIC:
         raise KeyError(topic)
     low, high = min(int(start), int(end)), max(int(start), int(end))
@@ -213,7 +236,10 @@ def select_unanswered_range(
             or (topic, int(question["question_number"])) not in completed
         )
     ]
-    unanswered.sort(key=lambda question: int(question["question_number"]))
+    if randomize:
+        random.shuffle(unanswered)
+    else:
+        unanswered.sort(key=lambda question: int(question["question_number"]))
     return unanswered
 
 

@@ -23,6 +23,7 @@ from quiz_core import (
     progress_to_csv,
     question_number_bounds,
     render_question_part,
+    select_all_topics,
     select_unanswered,
     select_unanswered_range,
     topic_state,
@@ -33,14 +34,12 @@ st.set_page_config(
     page_title="Physics MCQ Practice",
     page_icon="⚛️",
     layout="wide",
-    initial_sidebar_state="collapsed",
 )
 
 st.markdown(
     """
     <style>
     .block-container {padding-top: 1.8rem; padding-bottom: 3rem; max-width: 1400px;}
-    [data-testid="stSidebar"] {min-width: 320px; max-width: 320px;}
     .question-meta {color: #5d6673; font-size: 0.92rem; margin-bottom: 0.8rem;}
     .answer-note {color: #5d6673; font-size: 0.9rem;}
 
@@ -61,11 +60,6 @@ st.markdown(
             flex: 1 1 100% !important;
             width: 100% !important;
             min-width: 100% !important;
-        }
-        /* Let the sidebar overlay use the width it needs without overflowing */
-        [data-testid="stSidebar"] {
-            min-width: 85vw !important;
-            max-width: 92vw !important;
         }
         /* Bigger tap targets for radio options and buttons */
         [data-testid="stRadio"] label {
@@ -317,7 +311,7 @@ def render_scratch_pad(pad_key: str) -> None:
     components.html(_SCRATCH_PAD_HTML.replace("__PAD_KEY__", pad_key), height=470)
 
 
-ZOOM_LEVELS = [1.0, 1.5, 2.0, 2.5, 3.0]
+ZOOM_LEVELS = [1.0, 1.25, 1.5, 1.75, 2.0]
 BASE_IMAGE_HEIGHT = 300
 
 
@@ -345,8 +339,7 @@ completed: set[tuple[str, int]] = st.session_state.completed
 states = topic_state(completed, st.session_state.incorrect_counts)
 state_lookup = {row["Topic"]: row for row in states}
 
-with st.sidebar:
-    st.header("Quiz setup")
+with st.expander("Quiz setup", expanded=False):
     selected_topic = st.selectbox(
         "Topic",
         TOPIC_NAMES,
@@ -368,23 +361,30 @@ with st.sidebar:
         "Show all questions (not just unanswered)",
         key="show_all_questions",
     )
-    pool_size = total if show_all else unanswered
+
+    order_mode = st.radio(
+        "Order",
+        ["Ordered", "Random in this section", "Random in all sections"],
+        key="order_mode",
+    )
+    randomize = order_mode != "Ordered"
+    all_sections = order_mode == "Random in all sections"
+
+    if all_sections:
+        total_all = int(BANK["total_questions"])
+        correct_all = sum(s["Correct"] for s in states)
+        pool_size = total_all if show_all else (total_all - correct_all)
+    else:
+        pool_size = total if show_all else unanswered
 
     maximum = max(1, pool_size)
-    min_number, max_number = question_number_bounds(selected_topic)
 
-    selection_mode = st.radio(
-        "Select questions by",
-        ["Count", "Question range"],
-        horizontal=True,
-        disabled=pool_size == 0,
-    )
-
-    question_count = min(10, maximum)
-    range_from, range_to = min_number, max_number
+    selection_mode = "Count"
+    range_from = range_to = 0
     range_pool = pool_size
 
-    if selection_mode == "Count":
+    if all_sections:
+        st.caption("Question range isn't available across all sections.")
         question_count = st.number_input(
             "Number of questions",
             min_value=1,
@@ -394,39 +394,60 @@ with st.sidebar:
             disabled=pool_size == 0,
         )
     else:
-        range_col1, range_col2 = st.columns(2)
-        with range_col1:
-            range_from = st.number_input(
-                "From question #",
-                min_value=min_number,
-                max_value=max_number,
-                value=min_number,
-                step=1,
-                disabled=pool_size == 0,
-            )
-        with range_col2:
-            range_to = st.number_input(
-                "To question #",
-                min_value=min_number,
-                max_value=max_number,
-                value=max_number,
-                step=1,
-                disabled=pool_size == 0,
-            )
-        range_pool = sum(
-            1
-            for question in QUESTIONS_BY_TOPIC[selected_topic]
-            if range_from <= int(question["question_number"]) <= range_to
-            and (
-                show_all
-                or (selected_topic, int(question["question_number"])) not in completed
-            )
+        min_number, max_number = question_number_bounds(selected_topic)
+        selection_mode = st.radio(
+            "Select questions by",
+            ["Count", "Question range"],
+            horizontal=True,
+            disabled=pool_size == 0,
         )
-        range_word = "question(s)" if show_all else "unanswered question(s)"
-        st.caption(f"{range_pool} {range_word} in that range.")
+        question_count = min(10, maximum)
+        range_from, range_to = min_number, max_number
+
+        if selection_mode == "Count":
+            question_count = st.number_input(
+                "Number of questions",
+                min_value=1,
+                max_value=maximum,
+                value=min(10, maximum),
+                step=1,
+                disabled=pool_size == 0,
+            )
+        else:
+            range_col1, range_col2 = st.columns(2)
+            with range_col1:
+                range_from = st.number_input(
+                    "From question #",
+                    min_value=min_number,
+                    max_value=max_number,
+                    value=min_number,
+                    step=1,
+                    disabled=pool_size == 0,
+                )
+            with range_col2:
+                range_to = st.number_input(
+                    "To question #",
+                    min_value=min_number,
+                    max_value=max_number,
+                    value=max_number,
+                    step=1,
+                    disabled=pool_size == 0,
+                )
+            range_pool = sum(
+                1
+                for question in QUESTIONS_BY_TOPIC[selected_topic]
+                if range_from <= int(question["question_number"]) <= range_to
+                and (
+                    show_all
+                    or (selected_topic, int(question["question_number"]))
+                    not in completed
+                )
+            )
+            range_word = "question(s)" if show_all else "unanswered question(s)"
+            st.caption(f"{range_pool} {range_word} in that range.")
 
     start_disabled = pool_size == 0 or (
-        selection_mode == "Question range" and range_pool == 0
+        not all_sections and selection_mode == "Question range" and range_pool == 0
     )
 
     if st.button(
@@ -435,12 +456,17 @@ with st.sidebar:
         use_container_width=True,
         disabled=start_disabled,
     ):
-        if selection_mode == "Count":
+        if all_sections:
+            selected = select_all_topics(
+                int(question_count), completed, include_completed=show_all
+            )
+        elif selection_mode == "Count":
             selected = select_unanswered(
                 selected_topic,
                 int(question_count),
                 completed,
                 include_completed=show_all,
+                randomize=randomize,
             )
         else:
             selected = select_unanswered_range(
@@ -449,6 +475,7 @@ with st.sidebar:
                 int(range_to),
                 completed,
                 include_completed=show_all,
+                randomize=randomize,
             )
         st.session_state.quiz = [
             (question["topic"], int(question["question_number"]))
@@ -708,7 +735,7 @@ elif quiz and position >= len(quiz):
         clear_quiz()
         st.rerun()
 else:
-    st.info("Choose a topic and number of questions in the sidebar, then start a quiz.")
+    st.info("Open **Quiz setup** above to choose a topic and start a quiz.")
 
 st.divider()
 st.subheader("Progress by topic")
