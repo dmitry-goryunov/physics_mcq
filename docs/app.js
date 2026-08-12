@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const CACHE_NAME = "physics-mcq-cache-v14"; // keep in sync with sw.js
+  const CACHE_NAME = "physics-mcq-cache-v15"; // keep in sync with sw.js
   const PROGRESS_KEY = "physics_mcq_offline_progress_v1";
   const INCORRECT_KEY = "physics_mcq_offline_incorrect_v1";
   const OVERRIDES_KEY = "physics_mcq_offline_overrides_v1";
@@ -70,12 +70,51 @@
     questionZoom: 1,
     solutionZoom: 1,
     questionDrawMode: false,
+    esatMode: true,
   };
 
   const ZOOM_LEVELS = [1, 1.25, 1.5, 1.75, 2];
   const BASE_IMAGE_HEIGHT = 300;
 
   const key = (topic, number) => `${topic} ${number}`;
+
+  function rangeNumbers(start, end) {
+    const numbers = [];
+    for (let n = start; n <= end; n++) numbers.push(n);
+    return numbers;
+  }
+
+  // Per-topic question numbers in scope for ESAT prep (mirrors quiz_core.py's
+  // ESAT_TOPIC_RANGES). A topic absent or mapped to [] has no ESAT questions.
+  const ESAT_TOPIC_RANGES = {
+    Measurement: rangeNumbers(51, 55),
+    Kinematics: rangeNumbers(1, 48),
+    Dynamics: rangeNumbers(1, 50),
+    Forces: rangeNumbers(1, 48),
+    "Work, Energy, Power": rangeNumbers(1, 46),
+    "Motion in a Circle": [],
+    "Gravitational Field": [4, 7, 10, 14],
+    Oscillations: [],
+    "Thermal Physics": rangeNumbers(1, 70),
+    "Wave Motion": rangeNumbers(1, 50),
+    Superposition: rangeNumbers(1, 20),
+    "Electric Fields": [],
+    "Current of Electricity": rangeNumbers(1, 50),
+    "D.C. Circuits": rangeNumbers(1, 35),
+    Electromagnetism: rangeNumbers(1, 50),
+    "Electromagnetic Induction": rangeNumbers(1, 40),
+    "Alternating Currents": rangeNumbers(25, 35),
+    "Quantum Physics": [],
+    "Lasers and Semiconductors": [],
+    "Nuclear Physics": rangeNumbers(1, 50),
+  };
+
+  // Intersected against real question numbers so a listed range that runs
+  // past a topic's actual count is silently clamped, not pulled in anyway.
+  function esatQuestionNumbers(topic) {
+    const numbers = ESAT_TOPIC_RANGES[topic] || [];
+    return new Set(numbers.filter((n) => QUESTION_LOOKUP.has(key(topic, n))));
+  }
 
   function zoomBarHtml(action, current, extraButtonsHtml) {
     const options = ZOOM_LEVELS.map(
@@ -214,10 +253,20 @@
 
   function topicState() {
     return TOPIC_NAMES.map((topic) => {
-      const total = TOPIC_TOTALS.get(topic);
-      let correct = 0;
-      for (const q of QUESTIONS_BY_TOPIC.get(topic)) {
-        if (completed.has(key(topic, q.question_number))) correct += 1;
+      let total, correct;
+      if (state.esatMode) {
+        const numbers = esatQuestionNumbers(topic);
+        total = numbers.size;
+        correct = 0;
+        for (const n of numbers) {
+          if (completed.has(key(topic, n))) correct += 1;
+        }
+      } else {
+        total = TOPIC_TOTALS.get(topic);
+        correct = 0;
+        for (const q of QUESTIONS_BY_TOPIC.get(topic)) {
+          if (completed.has(key(topic, q.question_number))) correct += 1;
+        }
       }
       const incorrect = incorrectCounts.get(topic) || 0;
       return { topic, correct, incorrect, unanswered: total - correct, total };
@@ -233,32 +282,39 @@
     return copy;
   }
 
-  function selectUnanswered(topic, count, includeCompleted, randomize) {
+  function selectUnanswered(topic, count, includeCompleted, randomize, esatOnly) {
+    const allowed = esatOnly ? esatQuestionNumbers(topic) : null;
     let unanswered = QUESTIONS_BY_TOPIC.get(topic).filter(
-      (q) => includeCompleted || !completed.has(key(topic, q.question_number))
+      (q) =>
+        (!allowed || allowed.has(q.question_number)) &&
+        (includeCompleted || !completed.has(key(topic, q.question_number)))
     );
     if (randomize) unanswered = shuffleArray(unanswered);
     const n = Math.min(Math.max(0, count), unanswered.length);
     return unanswered.slice(0, n);
   }
 
-  function selectUnansweredRange(topic, from, to, includeCompleted, randomize) {
+  function selectUnansweredRange(topic, from, to, includeCompleted, randomize, esatOnly) {
     const low = Math.min(from, to);
     const high = Math.max(from, to);
+    const allowed = esatOnly ? esatQuestionNumbers(topic) : null;
     let inRange = QUESTIONS_BY_TOPIC.get(topic).filter(
       (q) =>
         q.question_number >= low &&
         q.question_number <= high &&
+        (!allowed || allowed.has(q.question_number)) &&
         (includeCompleted || !completed.has(key(topic, q.question_number)))
     );
     if (randomize) inRange = shuffleArray(inRange);
     return inRange;
   }
 
-  function selectAllTopics(count, includeCompleted) {
+  function selectAllTopics(count, includeCompleted, esatOnly) {
     let pool = [];
     for (const topic of TOPIC_NAMES) {
+      const allowed = esatOnly ? esatQuestionNumbers(topic) : null;
       for (const q of QUESTIONS_BY_TOPIC.get(topic)) {
+        if (allowed && !allowed.has(q.question_number)) continue;
         if (includeCompleted || !completed.has(key(topic, q.question_number))) {
           pool.push(q);
         }
@@ -269,7 +325,12 @@
     return pool.slice(0, n);
   }
 
-  function topicBounds(topic) {
+  function topicBounds(topic, esatOnly) {
+    if (esatOnly) {
+      const numbers = Array.from(esatQuestionNumbers(topic)).sort((a, b) => a - b);
+      if (!numbers.length) return [0, 0];
+      return [numbers[0], numbers[numbers.length - 1]];
+    }
     const list = QUESTIONS_BY_TOPIC.get(topic);
     return [list[0].question_number, list[list.length - 1].question_number];
   }
@@ -707,14 +768,20 @@
     const states = topicState();
     const stateByTopic = new Map(states.map((s) => [s.topic, s]));
     const flaggedCount = flagged.size;
-    if (!state.selectedTopic || !TOPIC_NAMES.includes(state.selectedTopic)) {
-      state.selectedTopic = TOPIC_NAMES[0];
+    const availableTopics = state.esatMode
+      ? TOPIC_NAMES.filter((t) => stateByTopic.get(t).total > 0)
+      : TOPIC_NAMES;
+    if (!state.selectedTopic || !availableTopics.includes(state.selectedTopic)) {
+      state.selectedTopic = availableTopics[0];
     }
     const current = stateByTopic.get(state.selectedTopic);
     const allSections = state.orderMode === "all";
     let poolSize;
     if (allSections) {
-      const totalAll = TOPIC_NAMES.reduce((sum, t) => sum + TOPIC_TOTALS.get(t), 0);
+      const totalAll = TOPIC_NAMES.reduce(
+        (sum, t) => sum + stateByTopic.get(t).total,
+        0
+      );
       const correctAll = TOPIC_NAMES.reduce(
         (sum, t) => sum + stateByTopic.get(t).correct,
         0
@@ -724,7 +791,7 @@
       poolSize = state.showAllQuestions ? current.total : current.unanswered;
     }
     const maximum = Math.max(1, poolSize);
-    const [minNumber, maxNumber] = topicBounds(state.selectedTopic);
+    const [minNumber, maxNumber] = topicBounds(state.selectedTopic, state.esatMode);
     const effectiveMode = allSections ? "count" : state.mode;
 
     if (state.count > maximum) state.count = Math.min(10, maximum);
@@ -739,14 +806,16 @@
         state.selectedTopic,
         from,
         to,
-        state.showAllQuestions
+        state.showAllQuestions,
+        false,
+        state.esatMode
       ).length;
     }
 
     const startDisabled =
       poolSize === 0 || (effectiveMode === "range" && rangePool === 0);
 
-    const topicOptions = TOPIC_NAMES.map(
+    const topicOptions = availableTopics.map(
       (name) =>
         `<option value="${escapeHtml(name)}" ${
           name === state.selectedTopic ? "selected" : ""
@@ -756,6 +825,11 @@
     const bodyHtml = state.sidebarCollapsed
       ? ""
       : `
+      <label class="checkbox-row"><input type="checkbox" data-action="toggle-esat" ${
+        state.esatMode ? "checked" : ""
+      }/> ESAT-specific question set</label>
+      <p class="caption">Limits topics, question pools, and every percentage below to the ESAT-relevant question subset.</p>
+
       <div class="field">
         <label for="topic-select">Topic</label>
         <select id="topic-select" data-action="select-topic">${topicOptions}</select>
@@ -1083,7 +1157,10 @@
   }
 
   function renderProgressTable() {
-    const states = topicState();
+    const allStates = topicState();
+    const states = state.esatMode
+      ? allStates.filter((s) => s.total > 0)
+      : allStates;
     const allTopicsRow = {
       topic: "All topics",
       correct: states.reduce((sum, s) => sum + s.correct, 0),
@@ -1168,6 +1245,12 @@
         state.showAllQuestions = event.target.checked;
         render();
         break;
+      case "toggle-esat":
+        state.esatMode = event.target.checked;
+        state.rangeFromTouched = false;
+        state.rangeToTouched = false;
+        render();
+        break;
       case "select-order":
         state.orderMode = event.target.value;
         render();
@@ -1201,17 +1284,18 @@
 
     switch (action) {
       case "start-quiz": {
-        const [minNumber, maxNumber] = topicBounds(state.selectedTopic);
+        const [minNumber, maxNumber] = topicBounds(state.selectedTopic, state.esatMode);
         const randomize = state.orderMode !== "ordered";
         let selected;
         if (state.orderMode === "all") {
-          selected = selectAllTopics(state.count, state.showAllQuestions);
+          selected = selectAllTopics(state.count, state.showAllQuestions, state.esatMode);
         } else if (state.mode === "count") {
           selected = selectUnanswered(
             state.selectedTopic,
             state.count,
             state.showAllQuestions,
-            randomize
+            randomize,
+            state.esatMode
           );
         } else {
           const from = clamp(state.rangeFrom, minNumber, maxNumber);
@@ -1221,7 +1305,8 @@
             from,
             to,
             state.showAllQuestions,
-            randomize
+            randomize,
+            state.esatMode
           );
         }
         startQuiz(state.selectedTopic, selected);

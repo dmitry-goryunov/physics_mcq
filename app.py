@@ -19,6 +19,7 @@ from quiz_core import (
     encode_answer_overrides,
     encode_incorrect_counts,
     encode_progress,
+    esat_question_numbers,
     progress_from_csv,
     progress_to_csv,
     question_number_bounds,
@@ -365,8 +366,6 @@ def render_resizable_image(image_bytes: bytes, alt: str, zoom: float) -> None:
 
 initialise_state()
 completed: set[tuple[str, int]] = st.session_state.completed
-states = topic_state(completed, st.session_state.incorrect_counts)
-state_lookup = {row["Topic"]: row for row in states}
 
 # An expander's open/closed state is sticky to its key once mounted — even
 # reassigning st.session_state[key] doesn't re-collapse it. "Start quiz"
@@ -379,11 +378,29 @@ with st.expander(
     expanded=False,
     key=f"quiz_setup_expanded_{st.session_state.quiz_setup_generation}",
 ):
+    esat_mode = st.checkbox(
+        "ESAT-specific question set",
+        value=True,
+        key="esat_mode",
+    )
+    st.caption(
+        "Limits topics, question pools, and every percentage below to the "
+        "ESAT-relevant question subset."
+    )
+
+    states = topic_state(completed, st.session_state.incorrect_counts, esat_only=esat_mode)
+    state_lookup = {row["Topic"]: row for row in states}
+    available_topics = (
+        [topic for topic in TOPIC_NAMES if state_lookup[topic]["Total"] > 0]
+        if esat_mode
+        else TOPIC_NAMES
+    )
+
     selected_topic = st.selectbox(
         "Topic",
-        TOPIC_NAMES,
-        index=TOPIC_NAMES.index(st.session_state.quiz_topic)
-        if st.session_state.quiz_topic in TOPIC_NAMES
+        available_topics,
+        index=available_topics.index(st.session_state.quiz_topic)
+        if st.session_state.quiz_topic in available_topics
         else 0,
     )
     selected_state = state_lookup[selected_topic]
@@ -410,7 +427,7 @@ with st.expander(
     all_sections = order_mode == "Random in all sections"
 
     if all_sections:
-        total_all = int(BANK["total_questions"])
+        total_all = sum(s["Total"] for s in states)
         correct_all = sum(s["Correct"] for s in states)
         pool_size = total_all if show_all else (total_all - correct_all)
     else:
@@ -433,7 +450,9 @@ with st.expander(
             disabled=pool_size == 0,
         )
     else:
-        min_number, max_number = question_number_bounds(selected_topic)
+        min_number, max_number = question_number_bounds(
+            selected_topic, esat_only=esat_mode
+        )
         selection_mode = st.radio(
             "Select questions by",
             ["Count", "Question range"],
@@ -472,10 +491,17 @@ with st.expander(
                     step=1,
                     disabled=pool_size == 0,
                 )
+            esat_allowed = (
+                esat_question_numbers(selected_topic) if esat_mode else None
+            )
             range_pool = sum(
                 1
                 for question in QUESTIONS_BY_TOPIC[selected_topic]
                 if range_from <= int(question["question_number"]) <= range_to
+                and (
+                    esat_allowed is None
+                    or int(question["question_number"]) in esat_allowed
+                )
                 and (
                     show_all
                     or (selected_topic, int(question["question_number"]))
@@ -497,7 +523,10 @@ with st.expander(
     ):
         if all_sections:
             selected = select_all_topics(
-                int(question_count), completed, include_completed=show_all
+                int(question_count),
+                completed,
+                include_completed=show_all,
+                esat_only=esat_mode,
             )
         elif selection_mode == "Count":
             selected = select_unanswered(
@@ -506,6 +535,7 @@ with st.expander(
                 completed,
                 include_completed=show_all,
                 randomize=randomize,
+                esat_only=esat_mode,
             )
         else:
             selected = select_unanswered_range(
@@ -515,6 +545,7 @@ with st.expander(
                 completed,
                 include_completed=show_all,
                 randomize=randomize,
+                esat_only=esat_mode,
             )
         st.session_state.quiz = [
             (question["topic"], int(question["question_number"]))
@@ -819,14 +850,15 @@ else:
 
 st.divider()
 st.subheader("Progress by topic")
+_visible_states = [row for row in states if row["Total"] > 0] if esat_mode else states
 _all_topics_row = {
     "Topic": "All topics",
-    "Correct": sum(row["Correct"] for row in states),
-    "Incorrect": sum(row["Incorrect"] for row in states),
-    "Unanswered": sum(row["Unanswered"] for row in states),
-    "Total": sum(row["Total"] for row in states),
+    "Correct": sum(row["Correct"] for row in _visible_states),
+    "Incorrect": sum(row["Incorrect"] for row in _visible_states),
+    "Unanswered": sum(row["Unanswered"] for row in _visible_states),
+    "Total": sum(row["Total"] for row in _visible_states),
 }
-_progress_rows = [_all_topics_row, *states]
+_progress_rows = [_all_topics_row, *_visible_states]
 for _row in _progress_rows:
     _row["% Complete"] = (
         round(_row["Correct"] / _row["Total"] * 100) if _row["Total"] else 0

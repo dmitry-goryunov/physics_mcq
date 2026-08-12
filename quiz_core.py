@@ -40,6 +40,48 @@ QUESTION_KEYS = [
 ]
 QUESTION_INDEX = {key: index for index, key in enumerate(QUESTION_KEYS)}
 
+# Per-topic question numbers that are in scope for ESAT prep. A topic absent
+# here or mapped to an empty tuple has no ESAT-relevant questions at all.
+ESAT_TOPIC_RANGES: dict[str, range | tuple[int, ...]] = {
+    "Measurement": range(51, 56),
+    "Kinematics": range(1, 49),
+    "Dynamics": range(1, 51),
+    "Forces": range(1, 49),
+    "Work, Energy, Power": range(1, 47),
+    "Motion in a Circle": (),
+    "Gravitational Field": (4, 7, 10, 14),
+    "Oscillations": (),
+    "Thermal Physics": range(1, 71),
+    "Wave Motion": range(1, 51),
+    "Superposition": range(1, 21),
+    "Electric Fields": (),
+    "Current of Electricity": range(1, 51),
+    "D.C. Circuits": range(1, 36),
+    "Electromagnetism": range(1, 51),
+    "Electromagnetic Induction": range(1, 41),
+    "Alternating Currents": range(25, 36),
+    "Quantum Physics": (),
+    "Lasers and Semiconductors": (),
+    "Nuclear Physics": range(1, 51),
+}
+
+
+def esat_question_numbers(topic: str) -> set[int]:
+    """Question numbers within `topic` that are in scope for ESAT prep.
+
+    Intersected against real question numbers so a listed range that runs
+    past a topic's actual count (the bank doesn't always match the source
+    numbering) is silently clamped instead of pulling in nonexistent ones.
+    """
+    return {
+        number
+        for number in ESAT_TOPIC_RANGES.get(topic, ())
+        if (topic, number) in QUESTION_INDEX
+    }
+
+
+ESAT_TOPICS = [topic for topic in TOPIC_NAMES if esat_question_numbers(topic)]
+
 
 def encode_progress(completed: set[tuple[str, int]]) -> str:
     """Encode completed questions as a compact URL-safe bitset."""
@@ -147,15 +189,21 @@ def effective_correct_answer(
 def topic_state(
     completed: set[tuple[str, int]],
     incorrect_counts: dict[str, int] | None = None,
+    esat_only: bool = False,
 ) -> list[dict]:
     incorrect_counts = incorrect_counts or {}
     state = []
     for topic in TOPIC_NAMES:
-        total = TOPIC_TOTALS[topic]
-        correct = sum(
-            (topic, int(question["question_number"])) in completed
-            for question in QUESTIONS_BY_TOPIC[topic]
-        )
+        if esat_only:
+            numbers = esat_question_numbers(topic)
+            total = len(numbers)
+            correct = sum((topic, number) in completed for number in numbers)
+        else:
+            total = TOPIC_TOTALS[topic]
+            correct = sum(
+                (topic, int(question["question_number"])) in completed
+                for question in QUESTIONS_BY_TOPIC[topic]
+            )
         state.append(
             {
                 "Topic": topic,
@@ -174,14 +222,19 @@ def select_unanswered(
     completed: set[tuple[str, int]],
     include_completed: bool = False,
     randomize: bool = False,
+    esat_only: bool = False,
 ) -> list[dict]:
     if topic not in QUESTIONS_BY_TOPIC:
         raise KeyError(topic)
+    allowed = esat_question_numbers(topic) if esat_only else None
     unanswered = [
         question
         for question in QUESTIONS_BY_TOPIC[topic]
-        if include_completed
-        or (topic, int(question["question_number"])) not in completed
+        if (allowed is None or int(question["question_number"]) in allowed)
+        and (
+            include_completed
+            or (topic, int(question["question_number"])) not in completed
+        )
     ]
     if randomize:
         random.shuffle(unanswered)
@@ -195,22 +248,35 @@ def select_all_topics(
     count: int,
     completed: set[tuple[str, int]],
     include_completed: bool = False,
+    esat_only: bool = False,
 ) -> list[dict]:
     """Randomly pick questions from across every topic (not just one)."""
     pool = [
         question
         for question in QUESTIONS
-        if include_completed
-        or (question["topic"], int(question["question_number"])) not in completed
+        if (
+            not esat_only
+            or int(question["question_number"])
+            in esat_question_numbers(question["topic"])
+        )
+        and (
+            include_completed
+            or (question["topic"], int(question["question_number"])) not in completed
+        )
     ]
     random.shuffle(pool)
     number = min(max(0, int(count)), len(pool))
     return pool[:number]
 
 
-def question_number_bounds(topic: str) -> tuple[int, int]:
+def question_number_bounds(topic: str, esat_only: bool = False) -> tuple[int, int]:
     if topic not in QUESTIONS_BY_TOPIC or not QUESTIONS_BY_TOPIC[topic]:
         raise KeyError(topic)
+    if esat_only:
+        numbers = sorted(esat_question_numbers(topic))
+        if not numbers:
+            raise KeyError(topic)
+        return numbers[0], numbers[-1]
     numbers = [int(question["question_number"]) for question in QUESTIONS_BY_TOPIC[topic]]
     return min(numbers), max(numbers)
 
@@ -222,15 +288,18 @@ def select_unanswered_range(
     completed: set[tuple[str, int]],
     include_completed: bool = False,
     randomize: bool = False,
+    esat_only: bool = False,
 ) -> list[dict]:
     """Return every unanswered question in [start, end] (inclusive)."""
     if topic not in QUESTIONS_BY_TOPIC:
         raise KeyError(topic)
     low, high = min(int(start), int(end)), max(int(start), int(end))
+    allowed = esat_question_numbers(topic) if esat_only else None
     unanswered = [
         question
         for question in QUESTIONS_BY_TOPIC[topic]
         if low <= int(question["question_number"]) <= high
+        and (allowed is None or int(question["question_number"]) in allowed)
         and (
             include_completed
             or (topic, int(question["question_number"])) not in completed
