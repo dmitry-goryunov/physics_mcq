@@ -413,7 +413,7 @@ def render_question_part(page_number: int, part: str) -> bytes:
 
 DOCUMENTS_DIR = APP_DIR / "documents"
 
-DOCUMENTS: list[dict] = [
+_DOCUMENT_SOURCES: list[dict] = [
     {
         "id": "esat_physics",
         "title": "ESAT Guide — Physics",
@@ -430,10 +430,18 @@ DOCUMENTS: list[dict] = [
         "filename": "Notes_on_Mathematics_-for_TMUA_and_ESAT_M2.pdf",
     },
 ]
-for _document in DOCUMENTS:
-    with fitz.open(DOCUMENTS_DIR / _document["filename"]) as _opened:
-        _document["pages"] = _opened.page_count
-del _document, _opened
+
+# Probing each PDF's page count happens at import time, so a single missing
+# or unreadable file (e.g. a deploy hiccup) must not take the whole app down
+# with it — it just quietly drops that one document from the mode switcher.
+DOCUMENTS: list[dict] = []
+for _source in _DOCUMENT_SOURCES:
+    try:
+        with fitz.open(DOCUMENTS_DIR / _source["filename"]) as _opened:
+            DOCUMENTS.append({**_source, "pages": _opened.page_count})
+    except Exception:
+        continue
+del _source
 
 DOCUMENT_LOOKUP = {document["id"]: document for document in DOCUMENTS}
 

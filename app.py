@@ -398,7 +398,9 @@ MODE_QUIZ = "quiz"
 MODE_IDS = [MODE_QUIZ] + [doc["id"] for doc in DOCUMENTS]
 MODE_LABELS = {MODE_QUIZ: "Physics MCQ", **{doc["id"]: doc["title"] for doc in DOCUMENTS}}
 
-if "app_mode" not in st.session_state:
+if st.session_state.get("app_mode") not in MODE_IDS:
+    # Falls back to quiz mode if unset, or if a previously selected document
+    # is no longer available (e.g. it failed to load this deploy).
     st.session_state.app_mode = MODE_QUIZ
 if "doc_positions" not in st.session_state:
     st.session_state.doc_positions = {}
