@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const CACHE_NAME = "physics-mcq-cache-v15"; // keep in sync with sw.js
+  const CACHE_NAME = "physics-mcq-cache-v16"; // keep in sync with sw.js
   const PROGRESS_KEY = "physics_mcq_offline_progress_v1";
   const INCORRECT_KEY = "physics_mcq_offline_incorrect_v1";
   const OVERRIDES_KEY = "physics_mcq_offline_overrides_v1";
@@ -12,8 +12,10 @@
     layout: document.querySelector(".layout"),
     sidebar: document.getElementById("sidebar"),
     main: document.getElementById("main"),
+    progressSection: document.getElementById("progress-section"),
     progressTable: document.getElementById("progress-table"),
     banner: document.getElementById("offline-banner"),
+    modeSwitch: document.getElementById("mode-switch"),
   };
 
   /** @type {any} */
@@ -23,6 +25,8 @@
   let QUESTIONS_BY_TOPIC = new Map();
   let QUESTION_LOOKUP = new Map();
   let ASSET_MANIFEST = [];
+  let DOCUMENTS = []; // [{id, title, pages}]
+  let DOCUMENT_LOOKUP = new Map(); // id -> {id, title, pages}
 
   let completed = new Set(); // keys: `${topic} ${number}`
   let incorrectCounts = new Map(); // topic -> lifetime wrong-submission count
@@ -53,7 +57,26 @@
   let annotateQuestionKey = null;
   let annotateLastRect = null;
 
+  // Document-page annotation canvas — same persistence pattern as the
+  // question-image overlay above, but strokes are additionally saved to
+  // IndexedDB per (doc, page) so they survive page navigation and reloads
+  // (unlike the quiz overlay, which is meant to be scratch-work only).
+  let docAnnotateCanvas = null;
+  let docAnnotateCtx = null;
+  let docAnnotateDrawing = false;
+  let docAnnotateLast = null;
+  let docAnnotateCurrentKey = null;
+  let docAnnotateLastRect = null;
+  let docAnnotateSaveDebounce = null;
+
+  const MODE_QUIZ = "quiz";
+  const DOC_BASE_HEIGHT_VH = 78;
+
   const state = {
+    appMode: MODE_QUIZ, // MODE_QUIZ | a document id
+    docPage: {}, // doc id -> last-viewed page number
+    docZoom: 1,
+    docDrawMode: false,
     selectedTopic: null,
     mode: "count",
     count: 10,
@@ -170,6 +193,17 @@
       ASSET_MANIFEST = await response.json();
     } catch (err) {
       ASSET_MANIFEST = [];
+    }
+  }
+
+  async function loadDocuments() {
+    try {
+      const response = await fetch("data/documents.json");
+      DOCUMENTS = await response.json();
+      DOCUMENT_LOOKUP = new Map(DOCUMENTS.map((doc) => [doc.id, doc]));
+    } catch (err) {
+      DOCUMENTS = [];
+      DOCUMENT_LOOKUP = new Map();
     }
   }
 
@@ -756,12 +790,230 @@
     }
   }
 
+  // ---------- document-page annotation (persists across pages/reloads via IndexedDB) ----------
+
+  const ANNOTATE_DB_NAME = "physics_mcq_doc_annotations";
+  const ANNOTATE_STORE = "pages";
+  let annotateDbPromise = null;
+
+  function openAnnotationDb() {
+    if (!annotateDbPromise) {
+      annotateDbPromise = new Promise((resolve, reject) => {
+        const req = indexedDB.open(ANNOTATE_DB_NAME, 1);
+        req.onupgradeneeded = () => {
+          if (!req.result.objectStoreNames.contains(ANNOTATE_STORE)) {
+            req.result.createObjectStore(ANNOTATE_STORE);
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+    return annotateDbPromise;
+  }
+
+  async function saveAnnotationSnapshot(key, dataUrl) {
+    try {
+      const db = await openAnnotationDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(ANNOTATE_STORE, "readwrite");
+        tx.objectStore(ANNOTATE_STORE).put(dataUrl, key);
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch (err) {
+      // Best-effort persistence; the drawing still works for this session.
+    }
+  }
+
+  async function loadAnnotationSnapshot(key) {
+    try {
+      const db = await openAnnotationDb();
+      return await new Promise((resolve, reject) => {
+        const tx = db.transaction(ANNOTATE_STORE, "readonly");
+        const req = tx.objectStore(ANNOTATE_STORE).get(key);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+      });
+    } catch (err) {
+      return null;
+    }
+  }
+
+  async function deleteAnnotationSnapshot(key) {
+    try {
+      const db = await openAnnotationDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(ANNOTATE_STORE, "readwrite");
+        tx.objectStore(ANNOTATE_STORE).delete(key);
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch (err) {
+      // ignore
+    }
+  }
+
+  function scheduleDocAnnotateSave() {
+    const keyAtStroke = docAnnotateCurrentKey;
+    const canvas = docAnnotateCanvas;
+    if (docAnnotateSaveDebounce) clearTimeout(docAnnotateSaveDebounce);
+    docAnnotateSaveDebounce = setTimeout(() => {
+      if (!canvas || !keyAtStroke) return;
+      saveAnnotationSnapshot(keyAtStroke, canvas.toDataURL("image/png"));
+    }, 400);
+  }
+
+  function attachDocAnnotateListeners(canvas, ctx) {
+    const pointerPos = (e) => {
+      const r = canvas.getBoundingClientRect();
+      return { x: e.clientX - r.left, y: e.clientY - r.top };
+    };
+
+    canvas.addEventListener("pointerdown", (e) => {
+      docAnnotateDrawing = true;
+      try {
+        canvas.setPointerCapture(e.pointerId);
+      } catch (err) {
+        // see attachScratchListeners
+      }
+      docAnnotateLast = pointerPos(e);
+      ctx.lineWidth = Math.max(1.2, (e.pressure || 0.5) * 3.5);
+    });
+    canvas.addEventListener("pointermove", (e) => {
+      if (!docAnnotateDrawing) return;
+      const p = pointerPos(e);
+      ctx.lineWidth = Math.max(1.2, (e.pressure || 0.5) * 3.5);
+      ctx.beginPath();
+      ctx.moveTo(docAnnotateLast.x, docAnnotateLast.y);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      docAnnotateLast = p;
+    });
+    ["pointerup", "pointercancel", "pointerleave"].forEach((evt) =>
+      canvas.addEventListener(evt, () => {
+        if (docAnnotateDrawing) scheduleDocAnnotateSave();
+        docAnnotateDrawing = false;
+        docAnnotateLast = null;
+      })
+    );
+  }
+
+  function resizeDocAnnotateCanvas(canvas, ctx, preserveContent) {
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const newWidth = Math.max(1, Math.round(rect.width * dpr));
+    const newHeight = Math.max(1, Math.round(rect.height * dpr));
+
+    let snapshot = null;
+    if (preserveContent && canvas.width > 0 && canvas.height > 0) {
+      snapshot = document.createElement("canvas");
+      snapshot.width = canvas.width;
+      snapshot.height = canvas.height;
+      snapshot.getContext("2d").drawImage(canvas, 0, 0);
+    }
+
+    canvas.width = newWidth;
+    canvas.height = newHeight;
+    ctx.scale(dpr, dpr);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "#e11d48";
+
+    if (snapshot) {
+      ctx.drawImage(snapshot, 0, 0, snapshot.width, snapshot.height, 0, 0, newWidth, newHeight);
+    }
+
+    docAnnotateLastRect = { width: rect.width, height: rect.height };
+  }
+
+  // Unlike mountAnnotateCanvas (cleared on every new question), a new page
+  // here triggers an async IndexedDB lookup so a previously saved drawing for
+  // that exact page reappears. docAnnotateCurrentKey is checked after the
+  // lookup resolves so a stale response can't land on a page the user has
+  // since navigated away from.
+  function mountDocAnnotateCanvas(currentKey) {
+    const mount = els.main.querySelector('[data-mount="doc-annotate"]');
+    if (!mount) return;
+
+    const isNew = !docAnnotateCanvas;
+    if (isNew) {
+      docAnnotateCanvas = document.createElement("canvas");
+      docAnnotateCanvas.className = "image-annotate-canvas";
+    }
+    mount.appendChild(docAnnotateCanvas);
+
+    if (isNew) {
+      docAnnotateCtx = docAnnotateCanvas.getContext("2d");
+      attachDocAnnotateListeners(docAnnotateCanvas, docAnnotateCtx);
+    }
+
+    docAnnotateCanvas.style.pointerEvents = state.docDrawMode ? "auto" : "none";
+    docAnnotateCanvas.style.touchAction = state.docDrawMode ? "none" : "auto";
+    docAnnotateCanvas.style.cursor = state.docDrawMode ? "crosshair" : "default";
+
+    const isNewPage = currentKey !== docAnnotateCurrentKey;
+    docAnnotateCurrentKey = currentKey;
+
+    const rect = docAnnotateCanvas.getBoundingClientRect();
+    const sizeChanged =
+      !docAnnotateLastRect ||
+      Math.abs(rect.width - docAnnotateLastRect.width) > 0.5 ||
+      Math.abs(rect.height - docAnnotateLastRect.height) > 0.5;
+
+    if (isNew || sizeChanged) {
+      resizeDocAnnotateCanvas(docAnnotateCanvas, docAnnotateCtx, !isNew && !isNewPage);
+    }
+
+    if (isNewPage) {
+      docAnnotateCtx.clearRect(0, 0, docAnnotateCanvas.width, docAnnotateCanvas.height);
+      loadAnnotationSnapshot(currentKey).then((dataUrl) => {
+        if (docAnnotateCurrentKey !== currentKey || !dataUrl) return;
+        const img = new Image();
+        img.onload = () => {
+          if (docAnnotateCurrentKey !== currentKey) return;
+          docAnnotateCtx.drawImage(
+            img,
+            0,
+            0,
+            img.width,
+            img.height,
+            0,
+            0,
+            docAnnotateCanvas.width,
+            docAnnotateCanvas.height
+          );
+        };
+        img.src = dataUrl;
+      });
+    }
+  }
+
   // ---------- rendering ----------
 
   function render() {
-    renderSidebar();
-    renderMain();
-    renderProgressTable();
+    renderModeSwitch();
+    if (state.appMode === MODE_QUIZ) {
+      els.sidebar.style.display = "";
+      els.progressSection.style.display = "";
+      renderSidebar();
+      renderMain();
+      renderProgressTable();
+    } else {
+      els.sidebar.style.display = "none";
+      els.progressSection.style.display = "none";
+      renderDocumentView();
+    }
+  }
+
+  function renderModeSwitch() {
+    const buttonHtml = (id, label) =>
+      `<button type="button" class="mode-switch-btn ${
+        state.appMode === id ? "mode-switch-btn-active" : ""
+      }" data-action="select-mode-app" data-mode="${id}">${escapeHtml(label)}</button>`;
+    els.modeSwitch.innerHTML =
+      buttonHtml(MODE_QUIZ, "Physics MCQ") +
+      DOCUMENTS.map((doc) => buttonHtml(doc.id, doc.title)).join("");
   }
 
   function renderSidebar() {
@@ -1196,6 +1448,66 @@
     `;
   }
 
+  function renderDocumentView() {
+    const doc = DOCUMENT_LOOKUP.get(state.appMode);
+    if (!doc) {
+      els.main.innerHTML = `<div class="empty-state">Document not found.</div>`;
+      return;
+    }
+    const page = state.docPage[doc.id] || 1;
+    const heightVh = Math.round(DOC_BASE_HEIGHT_VH * state.docZoom);
+
+    const zoomOptions = ZOOM_LEVELS.map(
+      (level) =>
+        `<option value="${level}" ${
+          level === state.docZoom ? "selected" : ""
+        }>${level}×</option>`
+    ).join("");
+
+    const isFullscreen = !!document.fullscreenElement;
+
+    els.main.innerHTML = `
+      <div class="doc-viewer" id="doc-viewer">
+        <div class="doc-header">
+          <h2>${escapeHtml(doc.title)}</h2>
+          <button type="button" class="btn doc-fullscreen-toggle" data-action="toggle-doc-fullscreen">${
+            isFullscreen ? "Exit fullscreen" : "⛶ Fullscreen"
+          }</button>
+        </div>
+        <div class="doc-nav">
+          <button type="button" class="btn" data-action="doc-prev" ${
+            page <= 1 ? "disabled" : ""
+          }>◀ Prev</button>
+          <div class="doc-page-input-wrap">
+            <input type="number" class="doc-page-input" data-action="doc-page-input"
+              min="1" max="${doc.pages}" value="${page}" />
+            <span>of ${doc.pages}</span>
+          </div>
+          <button type="button" class="btn" data-action="doc-next" ${
+            page >= doc.pages ? "disabled" : ""
+          }>Next ▶</button>
+          <label class="doc-zoom-label">Zoom <select data-action="doc-zoom">${zoomOptions}</select></label>
+          <button type="button" class="btn doc-annotate-toggle" data-action="toggle-doc-draw" style="${
+            state.docDrawMode
+              ? "background:var(--primary); border-color:var(--primary); color:#fff;"
+              : ""
+          }">${state.docDrawMode ? "✏️ Drawing on" : "✏️ Draw"}</button>
+          <button type="button" class="btn" data-action="clear-doc-annotate">Clear</button>
+        </div>
+        <div class="doc-page-scroll" style="height:${heightVh}vh;">
+          <div class="doc-page-frame">
+            <img class="doc-page-image" src="doc_img/${doc.id}_${page}.webp"
+              alt="${escapeHtml(doc.title)} page ${page}"
+              style="height:calc(${heightVh}vh - 2rem);" />
+            <div class="image-annotate-mount" data-mount="doc-annotate"></div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    mountDocAnnotateCanvas(`${doc.id}_${page}`);
+  }
+
   function showBanner(kind, text, autoHideMs) {
     els.banner.className = `banner banner-${kind}`;
     els.banner.textContent = text;
@@ -1273,6 +1585,17 @@
         state.solutionZoom = parseFloat(event.target.value) || 1;
         render();
         break;
+      case "doc-zoom":
+        state.docZoom = parseFloat(event.target.value) || 1;
+        render();
+        break;
+      case "doc-page-input": {
+        const doc = DOCUMENT_LOOKUP.get(state.appMode);
+        if (!doc) break;
+        state.docPage[doc.id] = clamp(parseInt(event.target.value, 10), 1, doc.pages);
+        render();
+        break;
+      }
       default:
         break;
     }
@@ -1482,6 +1805,54 @@
           annotateCtx.clearRect(0, 0, annotateCanvas.width, annotateCanvas.height);
         }
         break;
+      case "select-mode-app": {
+        const mode = event.target.dataset.mode;
+        if (mode) {
+          state.appMode = mode;
+          render();
+        }
+        break;
+      }
+      case "doc-prev": {
+        const doc = DOCUMENT_LOOKUP.get(state.appMode);
+        if (!doc) break;
+        const current = state.docPage[doc.id] || 1;
+        if (current > 1) {
+          state.docPage[doc.id] = current - 1;
+          render();
+        }
+        break;
+      }
+      case "doc-next": {
+        const doc = DOCUMENT_LOOKUP.get(state.appMode);
+        if (!doc) break;
+        const current = state.docPage[doc.id] || 1;
+        if (current < doc.pages) {
+          state.docPage[doc.id] = current + 1;
+          render();
+        }
+        break;
+      }
+      case "toggle-doc-draw":
+        state.docDrawMode = !state.docDrawMode;
+        render();
+        break;
+      case "clear-doc-annotate":
+        if (docAnnotateCtx && docAnnotateCanvas) {
+          docAnnotateCtx.clearRect(0, 0, docAnnotateCanvas.width, docAnnotateCanvas.height);
+        }
+        if (docAnnotateCurrentKey) deleteAnnotationSnapshot(docAnnotateCurrentKey);
+        break;
+      case "toggle-doc-fullscreen": {
+        const viewer = document.getElementById("doc-viewer");
+        if (!viewer) break;
+        if (document.fullscreenElement) {
+          document.exitFullscreen();
+        } else if (viewer.requestFullscreen) {
+          viewer.requestFullscreen();
+        }
+        break;
+      }
       case "download-offline":
         downloadForOffline();
         break;
@@ -1585,10 +1956,16 @@
     incorrectCounts = loadIncorrectCounts();
     answerOverrides = loadAnswerOverrides();
     flagged = loadFlags();
-    await Promise.all([loadBank(), loadAssetManifest()]);
+    await Promise.all([loadBank(), loadAssetManifest(), loadDocuments()]);
     state.selectedTopic = TOPIC_NAMES[0];
     render();
     refreshOfflineStatus();
+
+    // Keep the Fullscreen button's label in sync when the user exits via Esc
+    // or a browser gesture rather than the button itself.
+    document.addEventListener("fullscreenchange", () => {
+      if (state.appMode !== MODE_QUIZ) render();
+    });
 
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("sw.js").catch(() => {});

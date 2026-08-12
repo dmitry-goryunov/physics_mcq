@@ -9,6 +9,8 @@ from streamlit_local_storage import LocalStorage
 
 from quiz_core import (
     BANK,
+    DOCUMENTS,
+    DOCUMENT_LOOKUP,
     QUESTION_LOOKUP,
     QUESTIONS_BY_TOPIC,
     TOPIC_NAMES,
@@ -23,6 +25,7 @@ from quiz_core import (
     progress_from_csv,
     progress_to_csv,
     question_number_bounds,
+    render_document_page,
     render_question_part,
     select_all_topics,
     select_unanswered,
@@ -235,6 +238,11 @@ def cached_question_image(page_number: int, part: str) -> bytes:
     return render_question_part(page_number, part)
 
 
+@st.cache_data(show_spinner=False, max_entries=64)
+def cached_document_page(doc_id: str, page_number: int) -> bytes:
+    return render_document_page(doc_id, page_number)
+
+
 # The pad key is embedded in the HTML so the component's srcdoc changes (and
 # the iframe reloads, clearing the canvas) only when the question changes —
 # it survives reruns from selecting an answer, submitting, etc.
@@ -343,6 +351,7 @@ def render_scratch_pad(pad_key: str) -> None:
 
 ZOOM_LEVELS = [1.0, 1.25, 1.5, 1.75, 2.0]
 BASE_IMAGE_HEIGHT = 300
+DOC_BASE_HEIGHT = 820
 
 
 def render_resizable_image(image_bytes: bytes, alt: str, zoom: float) -> None:
@@ -364,8 +373,46 @@ def render_resizable_image(image_bytes: bytes, alt: str, zoom: float) -> None:
     components.html(html, height=height_px + 20, scrolling=True)
 
 
+def render_document_image(image_bytes: bytes, alt: str, zoom: float) -> None:
+    """A full PDF page in a tall, near-full-height scrollable reading pane —
+    "full screen" within what a sandboxed Streamlit component allows."""
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    height_px = round(DOC_BASE_HEIGHT * zoom)
+    html = f"""
+    <div style="width:100%; height:{height_px}px; overflow:auto; border-radius:8px;
+                border:1px solid #e2e5ec; background:#525659; box-sizing:border-box;">
+      <div style="display:flex; justify-content:center; padding:1rem;">
+        <img src="data:image/png;base64,{encoded}" alt="{alt}"
+             style="height:{height_px - 32}px; width:auto; display:block;
+                    box-shadow:0 2px 16px rgba(0,0,0,0.3);" />
+      </div>
+    </div>
+    """
+    components.html(html, height=height_px + 20, scrolling=True)
+
+
 initialise_state()
 completed: set[tuple[str, int]] = st.session_state.completed
+
+MODE_QUIZ = "quiz"
+MODE_IDS = [MODE_QUIZ] + [doc["id"] for doc in DOCUMENTS]
+MODE_LABELS = {MODE_QUIZ: "Physics MCQ", **{doc["id"]: doc["title"] for doc in DOCUMENTS}}
+
+if "app_mode" not in st.session_state:
+    st.session_state.app_mode = MODE_QUIZ
+if "doc_positions" not in st.session_state:
+    st.session_state.doc_positions = {}
+if "doc_zoom" not in st.session_state:
+    st.session_state.doc_zoom = 1.0
+
+st.radio(
+    "Mode",
+    MODE_IDS,
+    format_func=lambda m: MODE_LABELS[m],
+    horizontal=True,
+    key="app_mode",
+)
+app_mode = st.session_state.app_mode
 
 # An expander's open/closed state is sticky to its key once mounted — even
 # reassigning st.session_state[key] doesn't re-collapse it. "Start quiz"
@@ -373,96 +420,75 @@ completed: set[tuple[str, int]] = st.session_state.completed
 if "quiz_setup_generation" not in st.session_state:
     st.session_state.quiz_setup_generation = 0
 
-with st.expander(
-    "Quiz setup",
-    expanded=False,
-    key=f"quiz_setup_expanded_{st.session_state.quiz_setup_generation}",
-):
-    esat_mode = st.checkbox(
-        "ESAT-specific question set",
-        value=True,
-        key="esat_mode",
-    )
-    st.caption(
-        "Limits topics, question pools, and every percentage below to the "
-        "ESAT-relevant question subset."
-    )
-
-    states = topic_state(completed, st.session_state.incorrect_counts, esat_only=esat_mode)
-    state_lookup = {row["Topic"]: row for row in states}
-    available_topics = (
-        [topic for topic in TOPIC_NAMES if state_lookup[topic]["Total"] > 0]
-        if esat_mode
-        else TOPIC_NAMES
-    )
-
-    selected_topic = st.selectbox(
-        "Topic",
-        available_topics,
-        index=available_topics.index(st.session_state.quiz_topic)
-        if st.session_state.quiz_topic in available_topics
-        else 0,
-    )
-    selected_state = state_lookup[selected_topic]
-    total = selected_state["Total"]
-    correct = selected_state["Correct"]
-    incorrect = selected_state["Incorrect"]
-    unanswered = selected_state["Unanswered"]
-    st.progress(correct / total if total else 0)
-    st.caption(
-        f"{correct} correct; {incorrect} incorrect; {unanswered} unanswered; {total} total"
-    )
-
-    show_all = st.checkbox(
-        "Show all questions (not just unanswered)",
-        key="show_all_questions",
-    )
-
-    order_mode = st.radio(
-        "Order",
-        ["Ordered", "Random in this section", "Random in all sections"],
-        key="order_mode",
-    )
-    randomize = order_mode != "Ordered"
-    all_sections = order_mode == "Random in all sections"
-
-    if all_sections:
-        total_all = sum(s["Total"] for s in states)
-        correct_all = sum(s["Correct"] for s in states)
-        pool_size = total_all if show_all else (total_all - correct_all)
-    else:
-        pool_size = total if show_all else unanswered
-
-    maximum = max(1, pool_size)
-
-    selection_mode = "Count"
-    range_from = range_to = 0
-    range_pool = pool_size
-
-    if all_sections:
-        st.caption("Question range isn't available across all sections.")
-        question_count = st.number_input(
-            "Number of questions",
-            min_value=1,
-            max_value=maximum,
-            value=min(10, maximum),
-            step=1,
-            disabled=pool_size == 0,
+if app_mode == MODE_QUIZ:
+    with st.expander(
+        "Quiz setup",
+        expanded=False,
+        key=f"quiz_setup_expanded_{st.session_state.quiz_setup_generation}",
+    ):
+        esat_mode = st.checkbox(
+            "ESAT-specific question set",
+            value=True,
+            key="esat_mode",
         )
-    else:
-        min_number, max_number = question_number_bounds(
-            selected_topic, esat_only=esat_mode
+        st.caption(
+            "Limits topics, question pools, and every percentage below to the "
+            "ESAT-relevant question subset."
         )
-        selection_mode = st.radio(
-            "Select questions by",
-            ["Count", "Question range"],
-            horizontal=True,
-            disabled=pool_size == 0,
-        )
-        question_count = min(10, maximum)
-        range_from, range_to = min_number, max_number
 
-        if selection_mode == "Count":
+        states = topic_state(completed, st.session_state.incorrect_counts, esat_only=esat_mode)
+        state_lookup = {row["Topic"]: row for row in states}
+        available_topics = (
+            [topic for topic in TOPIC_NAMES if state_lookup[topic]["Total"] > 0]
+            if esat_mode
+            else TOPIC_NAMES
+        )
+
+        selected_topic = st.selectbox(
+            "Topic",
+            available_topics,
+            index=available_topics.index(st.session_state.quiz_topic)
+            if st.session_state.quiz_topic in available_topics
+            else 0,
+        )
+        selected_state = state_lookup[selected_topic]
+        total = selected_state["Total"]
+        correct = selected_state["Correct"]
+        incorrect = selected_state["Incorrect"]
+        unanswered = selected_state["Unanswered"]
+        st.progress(correct / total if total else 0)
+        st.caption(
+            f"{correct} correct; {incorrect} incorrect; {unanswered} unanswered; {total} total"
+        )
+
+        show_all = st.checkbox(
+            "Show all questions (not just unanswered)",
+            key="show_all_questions",
+        )
+
+        order_mode = st.radio(
+            "Order",
+            ["Ordered", "Random in this section", "Random in all sections"],
+            key="order_mode",
+        )
+        randomize = order_mode != "Ordered"
+        all_sections = order_mode == "Random in all sections"
+
+        if all_sections:
+            total_all = sum(s["Total"] for s in states)
+            correct_all = sum(s["Correct"] for s in states)
+            pool_size = total_all if show_all else (total_all - correct_all)
+        else:
+            pool_size = total if show_all else unanswered
+
+        maximum = max(1, pool_size)
+
+        selection_mode = "Count"
+        range_from = range_to = 0
+        range_pool = pool_size
+
+        if all_sections:
+            st.caption("Question range isn't available across all sections.")
             question_count = st.number_input(
                 "Number of questions",
                 min_value=1,
@@ -472,420 +498,497 @@ with st.expander(
                 disabled=pool_size == 0,
             )
         else:
-            range_col1, range_col2 = st.columns(2)
-            with range_col1:
-                range_from = st.number_input(
-                    "From question #",
-                    min_value=min_number,
-                    max_value=max_number,
-                    value=min_number,
+            min_number, max_number = question_number_bounds(
+                selected_topic, esat_only=esat_mode
+            )
+            selection_mode = st.radio(
+                "Select questions by",
+                ["Count", "Question range"],
+                horizontal=True,
+                disabled=pool_size == 0,
+            )
+            question_count = min(10, maximum)
+            range_from, range_to = min_number, max_number
+
+            if selection_mode == "Count":
+                question_count = st.number_input(
+                    "Number of questions",
+                    min_value=1,
+                    max_value=maximum,
+                    value=min(10, maximum),
                     step=1,
                     disabled=pool_size == 0,
                 )
-            with range_col2:
-                range_to = st.number_input(
-                    "To question #",
-                    min_value=min_number,
-                    max_value=max_number,
-                    value=max_number,
-                    step=1,
-                    disabled=pool_size == 0,
-                )
-            esat_allowed = (
-                esat_question_numbers(selected_topic) if esat_mode else None
-            )
-            range_pool = sum(
-                1
-                for question in QUESTIONS_BY_TOPIC[selected_topic]
-                if range_from <= int(question["question_number"]) <= range_to
-                and (
-                    esat_allowed is None
-                    or int(question["question_number"]) in esat_allowed
-                )
-                and (
-                    show_all
-                    or (selected_topic, int(question["question_number"]))
-                    not in completed
-                )
-            )
-            range_word = "question(s)" if show_all else "unanswered question(s)"
-            st.caption(f"{range_pool} {range_word} in that range.")
-
-    start_disabled = pool_size == 0 or (
-        not all_sections and selection_mode == "Question range" and range_pool == 0
-    )
-
-    if st.button(
-        "Start quiz",
-        type="primary",
-        use_container_width=True,
-        disabled=start_disabled,
-    ):
-        if all_sections:
-            selected = select_all_topics(
-                int(question_count),
-                completed,
-                include_completed=show_all,
-                esat_only=esat_mode,
-            )
-        elif selection_mode == "Count":
-            selected = select_unanswered(
-                selected_topic,
-                int(question_count),
-                completed,
-                include_completed=show_all,
-                randomize=randomize,
-                esat_only=esat_mode,
-            )
-        else:
-            selected = select_unanswered_range(
-                selected_topic,
-                int(range_from),
-                int(range_to),
-                completed,
-                include_completed=show_all,
-                randomize=randomize,
-                esat_only=esat_mode,
-            )
-        st.session_state.quiz = [
-            (question["topic"], int(question["question_number"]))
-            for question in selected
-        ]
-        st.session_state.quiz_position = 0
-        st.session_state.quiz_correct = 0
-        st.session_state.quiz_topic = selected_topic
-        st.session_state.submitted = False
-        st.session_state.feedback = None
-        st.session_state.quiz_nonce = uuid.uuid4().hex
-        st.session_state.quiz_setup_generation += 1
-        st.rerun()
-
-    if unanswered == 0:
-        st.success("All questions in this topic are recorded as correct.")
-
-    st.divider()
-    st.subheader("Flagged questions")
-    flagged_count = len(st.session_state.flagged)
-    st.caption(f"{flagged_count} question(s) flagged for review.")
-    if st.button(
-        "Review flagged questions",
-        use_container_width=True,
-        disabled=flagged_count == 0,
-    ):
-        flagged_questions = [
-            question
-            for topic in TOPIC_NAMES
-            for question in QUESTIONS_BY_TOPIC[topic]
-            if (topic, int(question["question_number"])) in st.session_state.flagged
-        ]
-        st.session_state.quiz = [
-            (question["topic"], int(question["question_number"]))
-            for question in flagged_questions
-        ]
-        st.session_state.quiz_position = 0
-        st.session_state.quiz_correct = 0
-        st.session_state.submitted = False
-        st.session_state.feedback = None
-        st.session_state.quiz_nonce = uuid.uuid4().hex
-        st.session_state.quiz_setup_generation += 1
-        st.rerun()
-
-    st.divider()
-    st.subheader("Topic reset")
-    st.caption(
-        "Removes recorded correct answers and the incorrect count for the "
-        "selected topic."
-    )
-    confirm_reset = st.checkbox("Confirm reset", key=f"confirm_reset_{selected_topic}")
-    if st.button(
-        "Reset this topic",
-        use_container_width=True,
-        disabled=not confirm_reset or (correct == 0 and incorrect == 0),
-    ):
-        remaining = {key for key in completed if key[0] != selected_topic}
-        removed = len(completed) - len(remaining)
-        save_progress(remaining)
-        remaining_incorrect = {
-            topic: count
-            for topic, count in st.session_state.incorrect_counts.items()
-            if topic != selected_topic
-        }
-        save_incorrect(remaining_incorrect)
-        if st.session_state.quiz_topic == selected_topic:
-            clear_quiz()
-        st.toast(f"Removed {removed} recorded answer(s) from {selected_topic}.")
-        st.rerun()
-
-    st.divider()
-    st.subheader("Correct-answer log")
-    st.download_button(
-        "Download CSV log",
-        data=progress_to_csv(completed),
-        file_name="correct_answers.csv",
-        mime="text/csv",
-        use_container_width=True,
-    )
-    uploaded_log = st.file_uploader(
-        "Restore from a CSV log",
-        type=["csv"],
-        help="Only rows whose answer matches the answer bank are imported.",
-    )
-    if uploaded_log is not None and st.button(
-        "Import log", use_container_width=True
-    ):
-        imported, rejected = progress_from_csv(uploaded_log.getvalue())
-        save_progress(imported)
-        clear_quiz()
-        message = f"Imported {len(imported)} correct answer(s)."
-        if rejected:
-            message += f" Rejected {rejected} invalid row(s)."
-        st.success(message)
-        st.rerun()
-
-    st.caption(
-        "Progress is encoded in this app's URL. Keep the current URL or download "
-        "the CSV log as a backup. No progress is written to a shared cloud file."
-    )
-
-st.title("Physics MCQ Practice")
-st.caption(
-    "Questions are drawn only from those not yet recorded as correct. "
-    "Incorrect attempts are not added to the log."
-)
-
-quiz: list[tuple[str, int]] = st.session_state.quiz
-position = st.session_state.quiz_position
-
-if quiz and position < len(quiz):
-    key = quiz[position]
-    question = QUESTION_LOOKUP[key]
-
-    header_left, header_right = st.columns([4, 1])
-    with header_left:
-        st.subheader(f"{question['topic']} · Question {question['question_number']}")
-        st.markdown(
-            f"<div class='question-meta'>Question {position + 1} of {len(quiz)}</div>",
-            unsafe_allow_html=True,
-        )
-    with header_right:
-        st.metric("Correct this quiz", st.session_state.quiz_correct)
-        is_flagged = key in st.session_state.flagged
-        if st.button(
-            "🚩 Flagged" if is_flagged else "🏳️ Flag question",
-            key=f"flag_{st.session_state.quiz_nonce}_{position}",
-            use_container_width=True,
-        ):
-            updated_flags = set(st.session_state.flagged)
-            if is_flagged:
-                updated_flags.discard(key)
             else:
-                updated_flags.add(key)
-            save_flags(updated_flags)
+                range_col1, range_col2 = st.columns(2)
+                with range_col1:
+                    range_from = st.number_input(
+                        "From question #",
+                        min_value=min_number,
+                        max_value=max_number,
+                        value=min_number,
+                        step=1,
+                        disabled=pool_size == 0,
+                    )
+                with range_col2:
+                    range_to = st.number_input(
+                        "To question #",
+                        min_value=min_number,
+                        max_value=max_number,
+                        value=max_number,
+                        step=1,
+                        disabled=pool_size == 0,
+                    )
+                esat_allowed = (
+                    esat_question_numbers(selected_topic) if esat_mode else None
+                )
+                range_pool = sum(
+                    1
+                    for question in QUESTIONS_BY_TOPIC[selected_topic]
+                    if range_from <= int(question["question_number"]) <= range_to
+                    and (
+                        esat_allowed is None
+                        or int(question["question_number"]) in esat_allowed
+                    )
+                    and (
+                        show_all
+                        or (selected_topic, int(question["question_number"]))
+                        not in completed
+                    )
+                )
+                range_word = "question(s)" if show_all else "unanswered question(s)"
+                st.caption(f"{range_pool} {range_word} in that range.")
+
+        start_disabled = pool_size == 0 or (
+            not all_sections and selection_mode == "Question range" and range_pool == 0
+        )
+
+        if st.button(
+            "Start quiz",
+            type="primary",
+            use_container_width=True,
+            disabled=start_disabled,
+        ):
+            if all_sections:
+                selected = select_all_topics(
+                    int(question_count),
+                    completed,
+                    include_completed=show_all,
+                    esat_only=esat_mode,
+                )
+            elif selection_mode == "Count":
+                selected = select_unanswered(
+                    selected_topic,
+                    int(question_count),
+                    completed,
+                    include_completed=show_all,
+                    randomize=randomize,
+                    esat_only=esat_mode,
+                )
+            else:
+                selected = select_unanswered_range(
+                    selected_topic,
+                    int(range_from),
+                    int(range_to),
+                    completed,
+                    include_completed=show_all,
+                    randomize=randomize,
+                    esat_only=esat_mode,
+                )
+            st.session_state.quiz = [
+                (question["topic"], int(question["question_number"]))
+                for question in selected
+            ]
+            st.session_state.quiz_position = 0
+            st.session_state.quiz_correct = 0
+            st.session_state.quiz_topic = selected_topic
+            st.session_state.submitted = False
+            st.session_state.feedback = None
+            st.session_state.quiz_nonce = uuid.uuid4().hex
+            st.session_state.quiz_setup_generation += 1
             st.rerun()
 
-    st.progress((position + 1) / len(quiz))
+        if unanswered == 0:
+            st.success("All questions in this topic are recorded as correct.")
 
-    question_col, solution_col = st.columns([1.2, 0.8], gap="large")
+        st.divider()
+        st.subheader("Flagged questions")
+        flagged_count = len(st.session_state.flagged)
+        st.caption(f"{flagged_count} question(s) flagged for review.")
+        if st.button(
+            "Review flagged questions",
+            use_container_width=True,
+            disabled=flagged_count == 0,
+        ):
+            flagged_questions = [
+                question
+                for topic in TOPIC_NAMES
+                for question in QUESTIONS_BY_TOPIC[topic]
+                if (topic, int(question["question_number"])) in st.session_state.flagged
+            ]
+            st.session_state.quiz = [
+                (question["topic"], int(question["question_number"]))
+                for question in flagged_questions
+            ]
+            st.session_state.quiz_position = 0
+            st.session_state.quiz_correct = 0
+            st.session_state.submitted = False
+            st.session_state.feedback = None
+            st.session_state.quiz_nonce = uuid.uuid4().hex
+            st.session_state.quiz_setup_generation += 1
+            st.rerun()
 
-    with question_col:
-        st.select_slider(
-            "Zoom",
-            options=ZOOM_LEVELS,
-            format_func=lambda x: f"{x:g}×",
-            key="question_zoom",
+        st.divider()
+        st.subheader("Topic reset")
+        st.caption(
+            "Removes recorded correct answers and the incorrect count for the "
+            "selected topic."
         )
-        render_resizable_image(
-            cached_question_image(int(question["page"]), "question"),
-            f"Question {question['question_number']}",
-            st.session_state.question_zoom,
+        confirm_reset = st.checkbox("Confirm reset", key=f"confirm_reset_{selected_topic}")
+        if st.button(
+            "Reset this topic",
+            use_container_width=True,
+            disabled=not confirm_reset or (correct == 0 and incorrect == 0),
+        ):
+            remaining = {key for key in completed if key[0] != selected_topic}
+            removed = len(completed) - len(remaining)
+            save_progress(remaining)
+            remaining_incorrect = {
+                topic: count
+                for topic, count in st.session_state.incorrect_counts.items()
+                if topic != selected_topic
+            }
+            save_incorrect(remaining_incorrect)
+            if st.session_state.quiz_topic == selected_topic:
+                clear_quiz()
+            st.toast(f"Removed {removed} recorded answer(s) from {selected_topic}.")
+            st.rerun()
+
+        st.divider()
+        st.subheader("Correct-answer log")
+        st.download_button(
+            "Download CSV log",
+            data=progress_to_csv(completed),
+            file_name="correct_answers.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+        uploaded_log = st.file_uploader(
+            "Restore from a CSV log",
+            type=["csv"],
+            help="Only rows whose answer matches the answer bank are imported.",
+        )
+        if uploaded_log is not None and st.button(
+            "Import log", use_container_width=True
+        ):
+            imported, rejected = progress_from_csv(uploaded_log.getvalue())
+            save_progress(imported)
+            clear_quiz()
+            message = f"Imported {len(imported)} correct answer(s)."
+            if rejected:
+                message += f" Rejected {rejected} invalid row(s)."
+            st.success(message)
+            st.rerun()
+
+        st.caption(
+            "Progress is encoded in this app's URL. Keep the current URL or download "
+            "the CSV log as a backup. No progress is written to a shared cloud file."
         )
 
-        answer_key = (
-            f"answer_{st.session_state.quiz_nonce}_{position}_{key[0]}_{key[1]}"
-        )
-        selected_answer = st.radio(
-            "Choose an answer",
-            ["A", "B", "C", "D"],
-            horizontal=True,
-            index=None,
-            key=answer_key,
-            disabled=st.session_state.submitted,
-        )
+    st.title("Physics MCQ Practice")
+    st.caption(
+        "Questions are drawn only from those not yet recorded as correct. "
+        "Incorrect attempts are not added to the log."
+    )
 
-        submit_col, next_col = st.columns(2)
-        with submit_col:
+    quiz: list[tuple[str, int]] = st.session_state.quiz
+    position = st.session_state.quiz_position
+
+    if quiz and position < len(quiz):
+        key = quiz[position]
+        question = QUESTION_LOOKUP[key]
+
+        header_left, header_right = st.columns([4, 1])
+        with header_left:
+            st.subheader(f"{question['topic']} · Question {question['question_number']}")
+            st.markdown(
+                f"<div class='question-meta'>Question {position + 1} of {len(quiz)}</div>",
+                unsafe_allow_html=True,
+            )
+        with header_right:
+            st.metric("Correct this quiz", st.session_state.quiz_correct)
+            is_flagged = key in st.session_state.flagged
             if st.button(
-                "Submit answer",
-                type="primary",
+                "🚩 Flagged" if is_flagged else "🏳️ Flag question",
+                key=f"flag_{st.session_state.quiz_nonce}_{position}",
                 use_container_width=True,
-                disabled=selected_answer is None or st.session_state.submitted,
             ):
-                effective_answer = effective_correct_answer(
-                    question, st.session_state.answer_overrides
-                )
-                is_correct = selected_answer == effective_answer
-                st.session_state.submitted = True
-                if is_correct:
-                    updated = set(completed)
-                    was_new = key not in updated
-                    updated.add(key)
-                    save_progress(updated)
-                    if was_new:
-                        st.session_state.quiz_correct += 1
-                    st.session_state.submitted_was_new = was_new
-                    st.session_state.feedback = (
-                        "success",
-                        f"Correct. The answer is {effective_answer}.",
-                    )
+                updated_flags = set(st.session_state.flagged)
+                if is_flagged:
+                    updated_flags.discard(key)
                 else:
-                    updated_incorrect = dict(st.session_state.incorrect_counts)
-                    updated_incorrect[question["topic"]] = (
-                        updated_incorrect.get(question["topic"], 0) + 1
-                    )
-                    save_incorrect(updated_incorrect)
-                    st.session_state.submitted_was_new = False
-                    st.session_state.feedback = (
-                        "error",
-                        "Incorrect. This question was not recorded and remains unanswered.",
-                    )
+                    updated_flags.add(key)
+                save_flags(updated_flags)
                 st.rerun()
 
-        with next_col:
-            if st.button(
-                "Next question" if position + 1 < len(quiz) else "Finish quiz",
-                use_container_width=True,
-                disabled=not st.session_state.submitted,
-            ):
-                st.session_state.quiz_position += 1
-                st.session_state.submitted = False
-                st.session_state.feedback = None
-                st.session_state.submitted_was_new = False
-                st.rerun()
+        st.progress((position + 1) / len(quiz))
 
-        feedback = st.session_state.feedback
-        if feedback:
-            kind, text = feedback
-            if kind == "success":
-                st.success(text)
-            else:
-                st.error(text)
-                if st.button(
-                    f"I'm right — the answer key is wrong (mark {selected_answer} as correct)",
-                    key=f"override_{st.session_state.quiz_nonce}_{position}",
-                ):
-                    updated_overrides = dict(st.session_state.answer_overrides)
-                    updated_overrides[key] = selected_answer
-                    save_overrides(updated_overrides)
+        question_col, solution_col = st.columns([1.2, 0.8], gap="large")
 
-                    updated = set(completed)
-                    was_new = key not in updated
-                    updated.add(key)
-                    save_progress(updated)
-                    if was_new:
-                        st.session_state.quiz_correct += 1
-                    st.session_state.submitted_was_new = was_new
-                    st.session_state.feedback = (
-                        "success",
-                        "Marked as correct. The answer key for this question has "
-                        f"been corrected to {selected_answer}.",
-                    )
-                    st.rerun()
-
-            if st.button(
-                "Undo — let me answer again",
-                key=f"undo_{st.session_state.quiz_nonce}_{position}",
-            ):
-                if st.session_state.submitted_was_new:
-                    updated = set(completed)
-                    updated.discard(key)
-                    save_progress(updated)
-                    st.session_state.quiz_correct = max(
-                        0, st.session_state.quiz_correct - 1
-                    )
-                st.session_state.submitted = False
-                st.session_state.feedback = None
-                st.session_state.submitted_was_new = False
-                st.rerun()
-
-    with solution_col:
-        show_solution = st.toggle(
-            "Show solution",
-            key=f"solution_{st.session_state.quiz_nonce}_{position}",
-        )
-        if show_solution:
+        with question_col:
             st.select_slider(
                 "Zoom",
                 options=ZOOM_LEVELS,
                 format_func=lambda x: f"{x:g}×",
-                key="solution_zoom",
+                key="question_zoom",
             )
             render_resizable_image(
-                cached_question_image(int(question["page"]), "solution"),
-                f"Solution {question['question_number']}",
-                st.session_state.solution_zoom,
-            )
-        else:
-            st.info("Turn on **Show solution** to reveal the source answer page.")
-
-        override_answer = st.session_state.answer_overrides.get(key)
-        if override_answer:
-            st.caption(
-                f"Note: you've corrected this question's answer key to "
-                f"**{override_answer}** (overrides the answer shown in the "
-                "solution image above)."
+                cached_question_image(int(question["page"]), "question"),
+                f"Question {question['question_number']}",
+                st.session_state.question_zoom,
             )
 
-        render_scratch_pad(f"{question['topic']}_{question['question_number']}")
+            answer_key = (
+                f"answer_{st.session_state.quiz_nonce}_{position}_{key[0]}_{key[1]}"
+            )
+            selected_answer = st.radio(
+                "Choose an answer",
+                ["A", "B", "C", "D"],
+                horizontal=True,
+                index=None,
+                key=answer_key,
+                disabled=st.session_state.submitted,
+            )
 
-elif quiz and position >= len(quiz):
-    st.success(
-        f"Quiz complete. {st.session_state.quiz_correct} of {len(quiz)} "
-        "questions were newly recorded as correct."
-    )
-    if st.button("Choose another quiz", type="primary"):
-        clear_quiz()
-        st.rerun()
-else:
-    st.info("Open **Quiz setup** above to choose a topic and start a quiz.")
+            submit_col, next_col = st.columns(2)
+            with submit_col:
+                if st.button(
+                    "Submit answer",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=selected_answer is None or st.session_state.submitted,
+                ):
+                    effective_answer = effective_correct_answer(
+                        question, st.session_state.answer_overrides
+                    )
+                    is_correct = selected_answer == effective_answer
+                    st.session_state.submitted = True
+                    if is_correct:
+                        updated = set(completed)
+                        was_new = key not in updated
+                        updated.add(key)
+                        save_progress(updated)
+                        if was_new:
+                            st.session_state.quiz_correct += 1
+                        st.session_state.submitted_was_new = was_new
+                        st.session_state.feedback = (
+                            "success",
+                            f"Correct. The answer is {effective_answer}.",
+                        )
+                    else:
+                        updated_incorrect = dict(st.session_state.incorrect_counts)
+                        updated_incorrect[question["topic"]] = (
+                            updated_incorrect.get(question["topic"], 0) + 1
+                        )
+                        save_incorrect(updated_incorrect)
+                        st.session_state.submitted_was_new = False
+                        st.session_state.feedback = (
+                            "error",
+                            "Incorrect. This question was not recorded and remains unanswered.",
+                        )
+                    st.rerun()
 
-st.divider()
-st.subheader("Progress by topic")
-_visible_states = [row for row in states if row["Total"] > 0] if esat_mode else states
-_all_topics_row = {
-    "Topic": "All topics",
-    "Correct": sum(row["Correct"] for row in _visible_states),
-    "Incorrect": sum(row["Incorrect"] for row in _visible_states),
-    "Unanswered": sum(row["Unanswered"] for row in _visible_states),
-    "Total": sum(row["Total"] for row in _visible_states),
-}
-_progress_rows = [_all_topics_row, *_visible_states]
-for _row in _progress_rows:
-    _row["% Complete"] = (
-        round(_row["Correct"] / _row["Total"] * 100) if _row["Total"] else 0
-    )
-st.dataframe(
-    _progress_rows,
-    hide_index=True,
-    use_container_width=True,
-    column_config={
-        "% Complete": st.column_config.ProgressColumn(
-            "% Complete", format="%d%%", min_value=0, max_value=100
+            with next_col:
+                if st.button(
+                    "Next question" if position + 1 < len(quiz) else "Finish quiz",
+                    use_container_width=True,
+                    disabled=not st.session_state.submitted,
+                ):
+                    st.session_state.quiz_position += 1
+                    st.session_state.submitted = False
+                    st.session_state.feedback = None
+                    st.session_state.submitted_was_new = False
+                    st.rerun()
+
+            feedback = st.session_state.feedback
+            if feedback:
+                kind, text = feedback
+                if kind == "success":
+                    st.success(text)
+                else:
+                    st.error(text)
+                    if st.button(
+                        f"I'm right — the answer key is wrong (mark {selected_answer} as correct)",
+                        key=f"override_{st.session_state.quiz_nonce}_{position}",
+                    ):
+                        updated_overrides = dict(st.session_state.answer_overrides)
+                        updated_overrides[key] = selected_answer
+                        save_overrides(updated_overrides)
+
+                        updated = set(completed)
+                        was_new = key not in updated
+                        updated.add(key)
+                        save_progress(updated)
+                        if was_new:
+                            st.session_state.quiz_correct += 1
+                        st.session_state.submitted_was_new = was_new
+                        st.session_state.feedback = (
+                            "success",
+                            "Marked as correct. The answer key for this question has "
+                            f"been corrected to {selected_answer}.",
+                        )
+                        st.rerun()
+
+                if st.button(
+                    "Undo — let me answer again",
+                    key=f"undo_{st.session_state.quiz_nonce}_{position}",
+                ):
+                    if st.session_state.submitted_was_new:
+                        updated = set(completed)
+                        updated.discard(key)
+                        save_progress(updated)
+                        st.session_state.quiz_correct = max(
+                            0, st.session_state.quiz_correct - 1
+                        )
+                    st.session_state.submitted = False
+                    st.session_state.feedback = None
+                    st.session_state.submitted_was_new = False
+                    st.rerun()
+
+        with solution_col:
+            show_solution = st.toggle(
+                "Show solution",
+                key=f"solution_{st.session_state.quiz_nonce}_{position}",
+            )
+            if show_solution:
+                st.select_slider(
+                    "Zoom",
+                    options=ZOOM_LEVELS,
+                    format_func=lambda x: f"{x:g}×",
+                    key="solution_zoom",
+                )
+                render_resizable_image(
+                    cached_question_image(int(question["page"]), "solution"),
+                    f"Solution {question['question_number']}",
+                    st.session_state.solution_zoom,
+                )
+            else:
+                st.info("Turn on **Show solution** to reveal the source answer page.")
+
+            override_answer = st.session_state.answer_overrides.get(key)
+            if override_answer:
+                st.caption(
+                    f"Note: you've corrected this question's answer key to "
+                    f"**{override_answer}** (overrides the answer shown in the "
+                    "solution image above)."
+                )
+
+            render_scratch_pad(f"{question['topic']}_{question['question_number']}")
+
+    elif quiz and position >= len(quiz):
+        st.success(
+            f"Quiz complete. {st.session_state.quiz_correct} of {len(quiz)} "
+            "questions were newly recorded as correct."
         )
-    },
-)
+        if st.button("Choose another quiz", type="primary"):
+            clear_quiz()
+            st.rerun()
+    else:
+        st.info("Open **Quiz setup** above to choose a topic and start a quiz.")
 
-with st.expander("How cloud progress works"):
-    st.write(
-        "The app does not modify files in GitHub or write one shared CSV on the "
-        "Streamlit server. Correct-answer progress, per-topic incorrect counts, "
-        "and any answer-key corrections are stored as compact codes in the "
-        "current URL and mirrored to this browser's local storage, so they're "
-        "restored automatically when you reopen the app on the same device. "
-        "Download the CSV log for a portable backup of correct answers, or "
-        "import it on another device (incorrect counts and answer-key "
-        "corrections aren't included in that backup)."
+    st.divider()
+    st.subheader("Progress by topic")
+    _visible_states = [row for row in states if row["Total"] > 0] if esat_mode else states
+    _all_topics_row = {
+        "Topic": "All topics",
+        "Correct": sum(row["Correct"] for row in _visible_states),
+        "Incorrect": sum(row["Incorrect"] for row in _visible_states),
+        "Unanswered": sum(row["Unanswered"] for row in _visible_states),
+        "Total": sum(row["Total"] for row in _visible_states),
+    }
+    _progress_rows = [_all_topics_row, *_visible_states]
+    for _row in _progress_rows:
+        _row["% Complete"] = (
+            round(_row["Correct"] / _row["Total"] * 100) if _row["Total"] else 0
+        )
+    st.dataframe(
+        _progress_rows,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "% Complete": st.column_config.ProgressColumn(
+                "% Complete", format="%d%%", min_value=0, max_value=100
+            )
+        },
     )
-    st.code(f"Question bank: {BANK['total_questions']} questions", language=None)
+
+    with st.expander("How cloud progress works"):
+        st.write(
+            "The app does not modify files in GitHub or write one shared CSV on the "
+            "Streamlit server. Correct-answer progress, per-topic incorrect counts, "
+            "and any answer-key corrections are stored as compact codes in the "
+            "current URL and mirrored to this browser's local storage, so they're "
+            "restored automatically when you reopen the app on the same device. "
+            "Download the CSV log for a portable backup of correct answers, or "
+            "import it on another device (incorrect counts and answer-key "
+            "corrections aren't included in that backup)."
+        )
+        st.code(f"Question bank: {BANK['total_questions']} questions", language=None)
+
+else:
+    doc = DOCUMENT_LOOKUP[app_mode]
+    page_key = f"doc_page_{app_mode}"
+    if page_key not in st.session_state:
+        st.session_state[page_key] = st.session_state.doc_positions.get(app_mode, 1)
+
+    st.title(doc["title"])
+
+    nav_prev, nav_page, nav_next, nav_zoom = st.columns([1, 1.4, 1, 1.6])
+    with nav_prev:
+        if st.button(
+            "◀ Prev", use_container_width=True, disabled=st.session_state[page_key] <= 1
+        ):
+            st.session_state[page_key] -= 1
+            st.rerun()
+    with nav_next:
+        if st.button(
+            "Next ▶",
+            use_container_width=True,
+            disabled=st.session_state[page_key] >= doc["pages"],
+        ):
+            st.session_state[page_key] += 1
+            st.rerun()
+    with nav_page:
+        st.number_input(
+            "Page",
+            min_value=1,
+            max_value=doc["pages"],
+            step=1,
+            key=page_key,
+            label_visibility="collapsed",
+        )
+    with nav_zoom:
+        st.select_slider(
+            "Zoom",
+            options=ZOOM_LEVELS,
+            format_func=lambda x: f"{x:g}×",
+            key="doc_zoom",
+            label_visibility="collapsed",
+        )
+
+    st.session_state.doc_positions[app_mode] = st.session_state[page_key]
+    st.caption(f"Page {st.session_state[page_key]} of {doc['pages']}")
+
+    render_document_image(
+        cached_document_page(app_mode, st.session_state[page_key]),
+        f"{doc['title']} — page {st.session_state[page_key]}",
+        st.session_state.doc_zoom,
+    )
+    st.caption(
+        "Reading position and zoom stay put while you switch pages or modes; "
+        "they reset if you reload the app. Freehand annotation on these pages "
+        "isn't available here — use the installed offline app for that."
+    )
 
 
 # Mirror a deliberate progress change to browser localStorage so the app can

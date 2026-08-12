@@ -22,17 +22,23 @@ from pathlib import Path
 import fitz
 from PIL import Image
 
-from quiz_core import BANK, QUESTIONS, trim_white_space
+from quiz_core import BANK, DOCUMENTS, DOCUMENTS_DIR, QUESTIONS, trim_white_space
 
 APP_DIR = Path(__file__).resolve().parent
 DOCS_DIR = APP_DIR / "docs"
 IMG_DIR = DOCS_DIR / "img"
+DOC_IMG_DIR = DOCS_DIR / "doc_img"
 DATA_DIR = DOCS_DIR / "data"
 SOURCE_PDF = APP_DIR / "physics_mcq_ALL_1022_question_answer_pairs_HQ.pdf"
 
 ZOOM = 4.0
 WEBP_QUALITY = 85
 WEBP_METHOD = 4
+
+# Reference documents are full text pages, not photographed diagrams, so they
+# stay legible at a lower render zoom — keeps the offline cache from doubling.
+DOC_ZOOM = 2.0
+DOC_WEBP_QUALITY = 82
 
 CORE_ASSETS = [
     "./",
@@ -43,6 +49,7 @@ CORE_ASSETS = [
     "icons/icon-192.png",
     "icons/icon-512.png",
     "data/questions.json",
+    "data/documents.json",
 ]
 
 
@@ -77,6 +84,40 @@ def build_images() -> list[str]:
             if page_number % 100 == 0 or page_number == total:
                 print(f"Rendered {page_number}/{total} pages", flush=True)
 
+    return asset_paths
+
+
+def build_document_images() -> list[str]:
+    """Render every page of each reference document (see quiz_core.DOCUMENTS)
+    to WebP for the offline PWA, mirroring build_images() above. Also writes
+    docs/data/documents.json so the PWA knows each document's id/title/page
+    count without bundling the source PDFs themselves."""
+    DOC_IMG_DIR.mkdir(parents=True, exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    asset_paths: list[str] = []
+    manifest = []
+
+    for doc in DOCUMENTS:
+        with fitz.open(DOCUMENTS_DIR / doc["filename"]) as document:
+            total = document.page_count
+            for index in range(total):
+                page_number = index + 1
+                out_path = DOC_IMG_DIR / f"{doc['id']}_{page_number}.webp"
+                pixmap = document.load_page(index).get_pixmap(
+                    matrix=fitz.Matrix(DOC_ZOOM, DOC_ZOOM), alpha=False
+                )
+                image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+                image.save(
+                    out_path, format="WEBP", quality=DOC_WEBP_QUALITY, method=WEBP_METHOD
+                )
+                asset_paths.append(f"doc_img/{doc['id']}_{page_number}.webp")
+                if page_number % 100 == 0 or page_number == total:
+                    print(f"  {doc['id']}: rendered {page_number}/{total} pages", flush=True)
+        manifest.append({"id": doc["id"], "title": doc["title"], "pages": total})
+
+    (DATA_DIR / "documents.json").write_text(
+        json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+    )
     return asset_paths
 
 
@@ -160,7 +201,9 @@ def main() -> None:
     build_icons()
     build_question_bank()
     image_assets = build_images()
-    build_asset_manifest(image_assets)
+    print("Rendering reference documents...")
+    doc_assets = build_document_images()
+    build_asset_manifest(image_assets + doc_assets)
     print("Done.")
 
 

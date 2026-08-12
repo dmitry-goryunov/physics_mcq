@@ -407,3 +407,51 @@ def render_question_part(page_number: int, part: str) -> bytes:
     output = io.BytesIO()
     cropped.save(output, format="PNG", optimize=True)
     return output.getvalue()
+
+
+# ---------- reference documents (full-page PDF viewer, not quiz questions) ----------
+
+DOCUMENTS_DIR = APP_DIR / "documents"
+
+DOCUMENTS: list[dict] = [
+    {
+        "id": "esat_physics",
+        "title": "ESAT Guide — Physics",
+        "filename": "ESAT_Guide_Physics.pdf",
+    },
+    {
+        "id": "esat_maths_1",
+        "title": "ESAT Guide — Mathematics 1",
+        "filename": "ESAT_Guide_Mathematics_1.pdf",
+    },
+    {
+        "id": "tmua_m2_notes",
+        "title": "Notes on Mathematics — for TMUA and ESAT M2",
+        "filename": "Notes_on_Mathematics_-for_TMUA_and_ESAT_M2.pdf",
+    },
+]
+for _document in DOCUMENTS:
+    with fitz.open(DOCUMENTS_DIR / _document["filename"]) as _opened:
+        _document["pages"] = _opened.page_count
+del _document, _opened
+
+DOCUMENT_LOOKUP = {document["id"]: document for document in DOCUMENTS}
+
+
+@lru_cache(maxsize=128)
+def render_document_page(doc_id: str, page_number: int) -> bytes:
+    """A full, uncropped PDF page rendered as PNG for the document viewer."""
+    document_meta = DOCUMENT_LOOKUP.get(doc_id)
+    if document_meta is None:
+        raise KeyError(doc_id)
+    if not 1 <= page_number <= document_meta["pages"]:
+        raise ValueError("page number outside document")
+
+    with fitz.open(DOCUMENTS_DIR / document_meta["filename"]) as document:
+        page = document.load_page(page_number - 1)
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0), alpha=False)
+
+    image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+    output = io.BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    return output.getvalue()
