@@ -497,7 +497,13 @@ button {
   flex-shrink: 0;
 }
 
-.scratch-pad-clear {
+.scratch-pad-tools {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.scratch-pad-clear,
+.scratch-pad-tool {
   width: auto;
   padding: 0.3rem 0.7rem;
   font-size: 0.8rem;

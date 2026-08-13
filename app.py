@@ -279,7 +279,10 @@ _SCRATCH_PAD_HTML = """
 <div data-pad-key="__PAD_KEY__" style="border:1px solid #d8dbe3; border-radius:8px; overflow:hidden; font-family:'Segoe UI', system-ui, sans-serif; display:flex; flex-direction:column; height:420px; min-height:200px; max-height:900px; resize:vertical;">
   <div style="display:flex; justify-content:space-between; align-items:center; padding:0.45rem 0.7rem; background:#f2f3f8; border-bottom:1px solid #d8dbe3; font-size:0.85rem; font-weight:600; color:#5d6673; flex-shrink:0;">
     <span>Scratch pad</span>
-    <button id="clearBtn" type="button" style="padding:0.3rem 0.7rem; font-size:0.8rem; font-weight:600; border:1px solid #d8dbe3; border-radius:8px; background:#fff; cursor:pointer;">Clear</button>
+    <div style="display:flex; gap:0.4rem;">
+      <button id="eraseBtn" type="button" style="padding:0.3rem 0.7rem; font-size:0.8rem; font-weight:600; border:1px solid #d8dbe3; border-radius:8px; background:#fff; cursor:pointer;">🧹 Eraser</button>
+      <button id="clearBtn" type="button" style="padding:0.3rem 0.7rem; font-size:0.8rem; font-weight:600; border:1px solid #d8dbe3; border-radius:8px; background:#fff; cursor:pointer;">Clear</button>
+    </div>
   </div>
   <canvas id="pad" style="display:block; width:100%; flex:1; min-height:0; touch-action:none; cursor:crosshair; background:#fff;"></canvas>
 </div>
@@ -288,7 +291,9 @@ _SCRATCH_PAD_HTML = """
   const canvas = document.getElementById("pad");
   const ctx = canvas.getContext("2d");
   const clearBtn = document.getElementById("clearBtn");
+  const eraseBtn = document.getElementById("eraseBtn");
   const container = canvas.closest("div[data-pad-key]");
+  let erasing = false;
 
   function sizeCanvas(preserveContent) {
     const rect = canvas.getBoundingClientRect();
@@ -341,6 +346,13 @@ _SCRATCH_PAD_HTML = """
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
+  function applyStrokeMode(pressure) {
+    ctx.globalCompositeOperation = erasing ? "destination-out" : "source-over";
+    ctx.lineWidth = erasing
+      ? Math.max(6, (pressure || 0.5) * 16)
+      : Math.max(1.2, (pressure || 0.5) * 3.5);
+  }
+
   canvas.addEventListener("pointerdown", (e) => {
     drawing = true;
     try {
@@ -350,12 +362,12 @@ _SCRATCH_PAD_HTML = """
       // drawing still works without it, just less reliable outside bounds.
     }
     last = pos(e);
-    ctx.lineWidth = Math.max(1.2, (e.pressure || 0.5) * 3.5);
+    applyStrokeMode(e.pressure);
   });
   canvas.addEventListener("pointermove", (e) => {
     if (!drawing) return;
     const p = pos(e);
-    ctx.lineWidth = Math.max(1.2, (e.pressure || 0.5) * 3.5);
+    applyStrokeMode(e.pressure);
     ctx.beginPath();
     ctx.moveTo(last.x, last.y);
     ctx.lineTo(p.x, p.y);
@@ -368,6 +380,13 @@ _SCRATCH_PAD_HTML = """
 
   clearBtn.addEventListener("click", () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+  });
+
+  eraseBtn.addEventListener("click", () => {
+    erasing = !erasing;
+    eraseBtn.style.background = erasing ? "#4f46e5" : "#fff";
+    eraseBtn.style.color = erasing ? "#fff" : "#000";
+    eraseBtn.style.borderColor = erasing ? "#4f46e5" : "#d8dbe3";
   });
 })();
 </script>

@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const CACHE_NAME = "physics-mcq-cache-v20"; // keep in sync with sw.js
+  const CACHE_NAME = "physics-mcq-cache-v21"; // keep in sync with sw.js
   const PROGRESS_KEY = "physics_mcq_offline_progress_v1";
   const INCORRECT_KEY = "physics_mcq_offline_incorrect_v1";
   const OVERRIDES_KEY = "physics_mcq_offline_overrides_v1";
@@ -78,6 +78,8 @@
     docPage: {}, // doc id -> last-viewed page number
     docZoom: 1,
     docDrawMode: false,
+    docEraseMode: false,
+    scratchEraseMode: false,
     selectedTopic: null,
     mode: "count",
     count: 10,
@@ -94,6 +96,7 @@
     questionZoom: 1,
     solutionZoom: 1,
     questionDrawMode: false,
+    questionEraseMode: false,
     esatMode: true,
   };
 
@@ -531,6 +534,20 @@
 
   // ---------- scratch pad (touch/pen drawing under the solution) ----------
 
+  // Erasing uses "destination-out" (punches transparent holes in whatever
+  // was drawn) with a wider stroke than the pen — works the same whether the
+  // canvas sits over an opaque CSS background (scratch pad) or a
+  // semi-transparent overlay atop an image (annotation canvases), since
+  // either way it just reveals whatever is behind the canvas.
+  function applyStrokeMode(ctx, pressure, isErasing, scale) {
+    const s = scale || 1;
+    ctx.globalCompositeOperation = isErasing ? "destination-out" : "source-over";
+    ctx.lineWidth =
+      (isErasing
+        ? Math.max(6, (pressure || 0.5) * 16)
+        : Math.max(1.2, (pressure || 0.5) * 3.5)) * s;
+  }
+
   function attachScratchListeners(canvas, ctx) {
     const pointerPos = (e) => {
       const r = canvas.getBoundingClientRect();
@@ -546,12 +563,12 @@
         // drawing still works without it, just less reliable outside bounds.
       }
       scratchLast = pointerPos(e);
-      ctx.lineWidth = Math.max(1.2, (e.pressure || 0.5) * 3.5);
+      applyStrokeMode(ctx, e.pressure, state.scratchEraseMode);
     });
     canvas.addEventListener("pointermove", (e) => {
       if (!scratchDrawing) return;
       const p = pointerPos(e);
-      ctx.lineWidth = Math.max(1.2, (e.pressure || 0.5) * 3.5);
+      applyStrokeMode(ctx, e.pressure, state.scratchEraseMode);
       ctx.beginPath();
       ctx.moveTo(scratchLast.x, scratchLast.y);
       ctx.lineTo(p.x, p.y);
@@ -711,12 +728,12 @@
         // see attachScratchListeners
       }
       annotateLast = pointerPos(e);
-      ctx.lineWidth = Math.max(1.2, (e.pressure || 0.5) * 3.5);
+      applyStrokeMode(ctx, e.pressure, state.questionEraseMode);
     });
     canvas.addEventListener("pointermove", (e) => {
       if (!annotateDrawing) return;
       const p = pointerPos(e);
-      ctx.lineWidth = Math.max(1.2, (e.pressure || 0.5) * 3.5);
+      applyStrokeMode(ctx, e.pressure, state.questionEraseMode);
       ctx.beginPath();
       ctx.moveTo(annotateLast.x, annotateLast.y);
       ctx.lineTo(p.x, p.y);
@@ -915,12 +932,12 @@
       }
       const p = docCanvasPoint(canvas, e);
       docAnnotateLast = p;
-      ctx.lineWidth = Math.max(1.2, (e.pressure || 0.5) * 3.5) * p.scale;
+      applyStrokeMode(ctx, e.pressure, state.docEraseMode, p.scale);
     });
     canvas.addEventListener("pointermove", (e) => {
       if (!docAnnotateDrawing) return;
       const p = docCanvasPoint(canvas, e);
-      ctx.lineWidth = Math.max(1.2, (e.pressure || 0.5) * 3.5) * p.scale;
+      applyStrokeMode(ctx, e.pressure, state.docEraseMode, p.scale);
       ctx.beginPath();
       ctx.moveTo(docAnnotateLast.x, docAnnotateLast.y);
       ctx.lineTo(p.x, p.y);
@@ -1307,10 +1324,15 @@
 
     const questionAnnotateButtons = `
       <button type="button" class="btn image-annotate-toggle" data-action="toggle-question-draw" style="${
-        state.questionDrawMode
+        state.questionDrawMode && !state.questionEraseMode
           ? "background:var(--primary); border-color:var(--primary); color:#fff;"
           : ""
-      }">${state.questionDrawMode ? "✏️ Drawing on" : "✏️ Draw"}</button>
+      }">${state.questionDrawMode && !state.questionEraseMode ? "✏️ Drawing on" : "✏️ Draw"}</button>
+      <button type="button" class="btn image-annotate-toggle" data-action="toggle-question-erase" style="${
+        state.questionDrawMode && state.questionEraseMode
+          ? "background:var(--primary); border-color:var(--primary); color:#fff;"
+          : ""
+      }">${state.questionDrawMode && state.questionEraseMode ? "🧹 Erasing on" : "🧹 Eraser"}</button>
       <button type="button" class="btn image-annotate-clear" data-action="clear-question-annotate">Clear</button>
     `;
 
@@ -1412,7 +1434,14 @@
           <div class="scratch-pad">
             <div class="scratch-pad-header">
               <span>Scratch pad</span>
-              <button type="button" class="btn scratch-pad-clear" data-action="clear-scratch-pad">Clear</button>
+              <div class="scratch-pad-tools">
+                <button type="button" class="btn scratch-pad-tool" data-action="toggle-scratch-erase" style="${
+                  state.scratchEraseMode
+                    ? "background:var(--primary); border-color:var(--primary); color:#fff;"
+                    : ""
+                }">🧹 Eraser</button>
+                <button type="button" class="btn scratch-pad-clear" data-action="clear-scratch-pad">Clear</button>
+              </div>
             </div>
             <div class="scratch-pad-mount" data-mount="scratch-pad"></div>
           </div>
@@ -1525,10 +1554,15 @@
           }>Next ▶</button>
           <label class="doc-zoom-label">Zoom <select data-action="doc-zoom">${zoomOptions}</select></label>
           <button type="button" class="btn doc-annotate-toggle" data-action="toggle-doc-draw" style="${
-            state.docDrawMode
+            state.docDrawMode && !state.docEraseMode
               ? "background:var(--primary); border-color:var(--primary); color:#fff;"
               : ""
-          }">${state.docDrawMode ? "✏️ Drawing on" : "✏️ Draw"}</button>
+          }">${state.docDrawMode && !state.docEraseMode ? "✏️ Drawing on" : "✏️ Draw"}</button>
+          <button type="button" class="btn doc-annotate-toggle" data-action="toggle-doc-erase" style="${
+            state.docDrawMode && state.docEraseMode
+              ? "background:var(--primary); border-color:var(--primary); color:#fff;"
+              : ""
+          }">${state.docDrawMode && state.docEraseMode ? "🧹 Erasing on" : "🧹 Eraser"}</button>
           <button type="button" class="btn" data-action="clear-doc-annotate">Clear</button>
         </div>
         <div class="doc-page-area">
@@ -1823,8 +1857,27 @@
           scratchCtx.clearRect(0, 0, scratchCanvas.width, scratchCanvas.height);
         }
         break;
+      case "toggle-scratch-erase":
+        state.scratchEraseMode = !state.scratchEraseMode;
+        render();
+        break;
       case "toggle-question-draw":
-        state.questionDrawMode = !state.questionDrawMode;
+        if (state.questionDrawMode && !state.questionEraseMode) {
+          state.questionDrawMode = false;
+        } else {
+          state.questionDrawMode = true;
+          state.questionEraseMode = false;
+        }
+        render();
+        break;
+      case "toggle-question-erase":
+        if (state.questionDrawMode && state.questionEraseMode) {
+          state.questionDrawMode = false;
+          state.questionEraseMode = false;
+        } else {
+          state.questionDrawMode = true;
+          state.questionEraseMode = true;
+        }
         render();
         break;
       case "toggle-flag": {
@@ -1875,7 +1928,22 @@
         break;
       }
       case "toggle-doc-draw":
-        state.docDrawMode = !state.docDrawMode;
+        if (state.docDrawMode && !state.docEraseMode) {
+          state.docDrawMode = false;
+        } else {
+          state.docDrawMode = true;
+          state.docEraseMode = false;
+        }
+        render();
+        break;
+      case "toggle-doc-erase":
+        if (state.docDrawMode && state.docEraseMode) {
+          state.docDrawMode = false;
+          state.docEraseMode = false;
+        } else {
+          state.docDrawMode = true;
+          state.docEraseMode = true;
+        }
         render();
         break;
       case "clear-doc-annotate":
