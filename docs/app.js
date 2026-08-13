@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const CACHE_NAME = "physics-mcq-cache-v16"; // keep in sync with sw.js
+  const CACHE_NAME = "physics-mcq-cache-v17"; // keep in sync with sw.js
   const PROGRESS_KEY = "physics_mcq_offline_progress_v1";
   const INCORRECT_KEY = "physics_mcq_offline_incorrect_v1";
   const OVERRIDES_KEY = "physics_mcq_offline_overrides_v1";
@@ -854,13 +854,20 @@
     }
   }
 
+  // Snapshotting the canvas must happen synchronously, right when the stroke
+  // ends — not inside the debounced timeout. The canvas is a single element
+  // reused across every page, so if the user navigates before the timeout
+  // fires, a delayed toDataURL() would capture whatever page is showing BY
+  // THEN and save it under the PREVIOUS page's key, corrupting it. Only the
+  // IndexedDB write itself (not the capture) is safe to defer.
   function scheduleDocAnnotateSave() {
     const keyAtStroke = docAnnotateCurrentKey;
     const canvas = docAnnotateCanvas;
+    if (!canvas || !keyAtStroke) return;
+    const dataUrl = canvas.toDataURL("image/png");
     if (docAnnotateSaveDebounce) clearTimeout(docAnnotateSaveDebounce);
     docAnnotateSaveDebounce = setTimeout(() => {
-      if (!canvas || !keyAtStroke) return;
-      saveAnnotationSnapshot(keyAtStroke, canvas.toDataURL("image/png"));
+      saveAnnotationSnapshot(keyAtStroke, dataUrl);
     }, 400);
   }
 
@@ -963,6 +970,23 @@
 
     if (isNew || sizeChanged) {
       resizeDocAnnotateCanvas(docAnnotateCanvas, docAnnotateCtx, !isNew && !isNewPage);
+    }
+
+    // .doc-page-frame shrink-wraps the page <img>, so the canvas's rect above
+    // is only correct once that image has actually finished loading and the
+    // browser knows its real dimensions. On a page never seen before (not
+    // yet browser-cached), the fetch is still in flight at this point, so
+    // the measurement just taken can be stale — re-run this same mount pass
+    // once the image settles to pick up the real size.
+    const pageImg = mount.parentElement && mount.parentElement.querySelector("img");
+    if (pageImg && !pageImg.complete) {
+      pageImg.addEventListener(
+        "load",
+        () => {
+          if (docAnnotateCurrentKey === currentKey) mountDocAnnotateCanvas(currentKey);
+        },
+        { once: true }
+      );
     }
 
     if (isNewPage) {
