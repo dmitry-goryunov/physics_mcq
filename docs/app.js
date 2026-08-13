@@ -1,11 +1,12 @@
 (() => {
   "use strict";
 
-  const CACHE_NAME = "physics-mcq-cache-v19"; // keep in sync with sw.js
+  const CACHE_NAME = "physics-mcq-cache-v20"; // keep in sync with sw.js
   const PROGRESS_KEY = "physics_mcq_offline_progress_v1";
   const INCORRECT_KEY = "physics_mcq_offline_incorrect_v1";
   const OVERRIDES_KEY = "physics_mcq_offline_overrides_v1";
   const FLAGGED_KEY = "physics_mcq_offline_flagged_v1";
+  const DOC_BOOKMARKS_KEY = "physics_mcq_offline_doc_bookmarks_v1";
   const LOG_COLUMNS = ["topic", "question_number", "page", "correct_answer"];
 
   const els = {
@@ -32,6 +33,7 @@
   let incorrectCounts = new Map(); // topic -> lifetime wrong-submission count
   let answerOverrides = new Map(); // key(topic, number) -> corrected answer letter
   let flagged = new Set(); // keys: key(topic, number), flagged for later review
+  let docBookmarks = new Map(); // key: `${docId}_${page}` -> color 1|2|3
   let deferredInstallPrompt = null;
 
   // Scratch pad canvas persists as a single DOM node moved between renders
@@ -99,6 +101,7 @@
   const BASE_IMAGE_HEIGHT = 300;
 
   const key = (topic, number) => `${topic} ${number}`;
+  const docPageKey = (docId, page) => `${docId}_${page}`;
 
   function rangeNumbers(start, end) {
     const numbers = [];
@@ -280,6 +283,21 @@
       return [topic, Number(number)];
     });
     localStorage.setItem(FLAGGED_KEY, JSON.stringify(pairs));
+  }
+
+  function loadDocBookmarks() {
+    try {
+      const raw = localStorage.getItem(DOC_BOOKMARKS_KEY);
+      if (!raw) return new Map();
+      const pairs = JSON.parse(raw);
+      return new Map(pairs.filter(([, color]) => color === 1 || color === 2 || color === 3));
+    } catch (err) {
+      return new Map();
+    }
+  }
+
+  function saveDocBookmarks() {
+    localStorage.setItem(DOC_BOOKMARKS_KEY, JSON.stringify(Array.from(docBookmarks.entries())));
   }
 
   // ---------- domain logic (mirrors quiz_core.py) ----------
@@ -1464,6 +1482,27 @@
 
     const isFullscreen = !!document.fullscreenElement;
 
+    const dogEarColor = docBookmarks.get(docPageKey(doc.id, page)) || 0;
+
+    // Every bookmarked page for THIS document, as a stack of small tabs down
+    // the left edge — click one to jump straight to that page.
+    const bookmarkEntries = [];
+    for (const [k, color] of docBookmarks) {
+      if (k.startsWith(doc.id + "_")) {
+        const pageNum = parseInt(k.slice(doc.id.length + 1), 10);
+        if (Number.isInteger(pageNum)) bookmarkEntries.push({ page: pageNum, color });
+      }
+    }
+    bookmarkEntries.sort((a, b) => a.page - b.page);
+    const railHtml = bookmarkEntries.length
+      ? `<div class="doc-bookmark-rail">${bookmarkEntries
+          .map(
+            (b) =>
+              `<button type="button" class="doc-bookmark-tab doc-bookmark-color-${b.color}" data-action="jump-doc-page" data-page="${b.page}" title="Page ${b.page}">${b.page}</button>`
+          )
+          .join("")}</div>`
+      : "";
+
     els.main.innerHTML = `
       <div class="doc-viewer" id="doc-viewer">
         <div class="doc-header">
@@ -1492,12 +1531,16 @@
           }">${state.docDrawMode ? "✏️ Drawing on" : "✏️ Draw"}</button>
           <button type="button" class="btn" data-action="clear-doc-annotate">Clear</button>
         </div>
-        <div class="doc-page-scroll" style="height:${heightVh}vh;">
-          <div class="doc-page-frame">
-            <img class="doc-page-image" src="doc_img/${doc.id}_${page}.webp"
-              alt="${escapeHtml(doc.title)} page ${page}"
-              style="height:calc(${heightVh}vh - 2rem);" />
-            <div class="image-annotate-mount" data-mount="doc-annotate"></div>
+        <div class="doc-page-area">
+          ${railHtml}
+          <div class="doc-page-scroll" style="height:${heightVh}vh;">
+            <div class="doc-page-frame">
+              <img class="doc-page-image" src="doc_img/${doc.id}_${page}.webp"
+                alt="${escapeHtml(doc.title)} page ${page}"
+                style="height:calc(${heightVh}vh - 2rem);" />
+              <div class="image-annotate-mount" data-mount="doc-annotate"></div>
+              <button type="button" class="doc-dogear doc-dogear-${dogEarColor}" data-action="cycle-doc-dogear" title="Bookmark this page" aria-label="Bookmark this page"></button>
+            </div>
           </div>
         </div>
       </div>
@@ -1851,6 +1894,31 @@
         }
         break;
       }
+      case "cycle-doc-dogear": {
+        const doc = DOCUMENT_LOOKUP.get(state.appMode);
+        if (!doc) break;
+        const page = state.docPage[doc.id] || 1;
+        const k = docPageKey(doc.id, page);
+        const next = ((docBookmarks.get(k) || 0) + 1) % 4; // none -> 1 -> 2 -> 3 -> none
+        if (next === 0) {
+          docBookmarks.delete(k);
+        } else {
+          docBookmarks.set(k, next);
+        }
+        saveDocBookmarks();
+        render();
+        break;
+      }
+      case "jump-doc-page": {
+        const doc = DOCUMENT_LOOKUP.get(state.appMode);
+        if (!doc) break;
+        const targetPage = parseInt(event.target.dataset.page, 10);
+        if (Number.isInteger(targetPage)) {
+          state.docPage[doc.id] = targetPage;
+          render();
+        }
+        break;
+      }
       case "download-offline":
         downloadForOffline();
         break;
@@ -1954,6 +2022,7 @@
     incorrectCounts = loadIncorrectCounts();
     answerOverrides = loadAnswerOverrides();
     flagged = loadFlags();
+    docBookmarks = loadDocBookmarks();
     await Promise.all([loadBank(), loadAssetManifest(), loadDocuments()]);
     state.selectedTopic = TOPIC_NAMES[0];
     render();

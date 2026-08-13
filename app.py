@@ -15,10 +15,12 @@ from quiz_core import (
     QUESTIONS_BY_TOPIC,
     TOPIC_NAMES,
     decode_answer_overrides,
+    decode_doc_bookmarks,
     decode_incorrect_counts,
     decode_progress,
     effective_correct_answer,
     encode_answer_overrides,
+    encode_doc_bookmarks,
     encode_incorrect_counts,
     encode_progress,
     esat_question_numbers,
@@ -87,6 +89,7 @@ PROGRESS_STORAGE_KEY = "physics_mcq_progress_v1"
 INCORRECT_STORAGE_KEY = "physics_mcq_incorrect_v1"
 OVERRIDES_STORAGE_KEY = "physics_mcq_overrides_v1"
 FLAGGED_STORAGE_KEY = "physics_mcq_flagged_v1"
+DOC_BOOKMARKS_STORAGE_KEY = "physics_mcq_doc_bookmarks_v1"
 
 # Bidirectional browser localStorage bridge. Reading happens through the
 # Streamlit component return protocol, so it works inside the sandboxed
@@ -123,6 +126,13 @@ def read_url_flagged() -> set[tuple[str, int]]:
     # Flags are just another set of question keys, so they reuse the same
     # compact bitset codec as completed-question progress.
     return decode_progress(str(value))
+
+
+def read_url_doc_bookmarks() -> dict[tuple[str, int], int]:
+    value = st.query_params.get("bookmarks", "")
+    if isinstance(value, list):
+        value = value[-1] if value else ""
+    return decode_doc_bookmarks(str(value))
 
 
 def save_progress(completed: set[tuple[str, int]]) -> None:
@@ -168,6 +178,16 @@ def save_flags(flagged: set[tuple[str, int]]) -> None:
     st.session_state.storage_dirty = True
 
 
+def save_doc_bookmarks(bookmarks: dict[tuple[str, int], int]) -> None:
+    token = encode_doc_bookmarks(bookmarks)
+    if token:
+        st.query_params["bookmarks"] = token
+    elif "bookmarks" in st.query_params:
+        del st.query_params["bookmarks"]
+    st.session_state.doc_bookmarks = dict(bookmarks)
+    st.session_state.storage_dirty = True
+
+
 def clear_quiz() -> None:
     st.session_state.quiz = []
     st.session_state.quiz_position = 0
@@ -189,6 +209,8 @@ def initialise_state() -> None:
         st.session_state.answer_overrides = read_url_overrides()
     if "flagged" not in st.session_state:
         st.session_state.flagged = read_url_flagged()
+    if "doc_bookmarks" not in st.session_state:
+        st.session_state.doc_bookmarks = read_url_doc_bookmarks()
     if "question_zoom" not in st.session_state:
         st.session_state.question_zoom = 1.0
     if "solution_zoom" not in st.session_state:
@@ -229,6 +251,13 @@ def initialise_state() -> None:
             if restored_flagged:
                 st.session_state.flagged = restored_flagged
                 st.query_params["flagged"] = str(flagged_token)
+
+        bookmarks_token = local_storage.getItem(DOC_BOOKMARKS_STORAGE_KEY)
+        if bookmarks_token:
+            restored_bookmarks = decode_doc_bookmarks(str(bookmarks_token))
+            if restored_bookmarks:
+                st.session_state.doc_bookmarks = restored_bookmarks
+                st.query_params["bookmarks"] = str(bookmarks_token)
 
         st.session_state.ls_restored = True
 
@@ -945,52 +974,105 @@ else:
 
     st.title(doc["title"])
 
-    nav_prev, nav_page, nav_next, nav_zoom = st.columns([1, 1.4, 1, 1.6])
-    with nav_prev:
-        if st.button(
-            "◀ Prev", use_container_width=True, disabled=st.session_state[page_key] <= 1
-        ):
-            st.session_state[page_key] -= 1
-            st.rerun()
-    with nav_next:
-        if st.button(
-            "Next ▶",
-            use_container_width=True,
-            disabled=st.session_state[page_key] >= doc["pages"],
-        ):
-            st.session_state[page_key] += 1
-            st.rerun()
-    with nav_page:
-        st.number_input(
-            "Page",
-            min_value=1,
-            max_value=doc["pages"],
-            step=1,
-            key=page_key,
-            label_visibility="collapsed",
-        )
-    with nav_zoom:
-        st.select_slider(
-            "Zoom",
-            options=ZOOM_LEVELS,
-            format_func=lambda x: f"{x:g}×",
-            key="doc_zoom",
-            label_visibility="collapsed",
-        )
+    BOOKMARK_ICONS = {0: "🏳️", 1: "🔴", 2: "🟡", 3: "🟢"}
 
-    st.session_state.doc_positions[app_mode] = st.session_state[page_key]
-    st.caption(f"Page {st.session_state[page_key]} of {doc['pages']}")
+    # Every bookmarked page for THIS document, as a stack of small jump
+    # buttons down the left edge — mirrors the PWA's colored dog-ear tab
+    # rail. An interactive overlay directly on the page image (a literal
+    # dog-ear, like the PWA has) isn't possible here: the image is embedded
+    # in a sandboxed iframe with no channel back to Streamlit's Python
+    # state, so this button-column is the equivalent within that constraint.
+    doc_bookmark_entries = sorted(
+        (page, color)
+        for (bookmark_doc_id, page), color in st.session_state.doc_bookmarks.items()
+        if bookmark_doc_id == app_mode
+    )
 
-    render_document_image(
-        cached_document_page(app_mode, st.session_state[page_key]),
-        f"{doc['title']} — page {st.session_state[page_key]}",
-        st.session_state.doc_zoom,
-    )
-    st.caption(
-        "Reading position and zoom stay put while you switch pages or modes; "
-        "they reset if you reload the app. Freehand annotation on these pages "
-        "isn't available here — use the installed offline app for that."
-    )
+    if doc_bookmark_entries:
+        rail_col, content_col = st.columns([0.12, 1])
+    else:
+        rail_col, content_col = None, st.container()
+
+    if rail_col is not None:
+        with rail_col:
+            for bookmark_page, bookmark_color in doc_bookmark_entries:
+                if st.button(
+                    f"{BOOKMARK_ICONS[bookmark_color]} {bookmark_page}",
+                    key=f"jump_bookmark_{app_mode}_{bookmark_page}",
+                    use_container_width=True,
+                ):
+                    st.session_state[page_key] = bookmark_page
+                    st.rerun()
+
+    with content_col:
+        nav_prev, nav_page, nav_next, nav_bookmark, nav_zoom = st.columns(
+            [1, 1.2, 1, 1.3, 1.5]
+        )
+        with nav_prev:
+            if st.button(
+                "◀ Prev",
+                use_container_width=True,
+                disabled=st.session_state[page_key] <= 1,
+            ):
+                st.session_state[page_key] -= 1
+                st.rerun()
+        with nav_next:
+            if st.button(
+                "Next ▶",
+                use_container_width=True,
+                disabled=st.session_state[page_key] >= doc["pages"],
+            ):
+                st.session_state[page_key] += 1
+                st.rerun()
+        with nav_page:
+            st.number_input(
+                "Page",
+                min_value=1,
+                max_value=doc["pages"],
+                step=1,
+                key=page_key,
+                label_visibility="collapsed",
+            )
+        with nav_bookmark:
+            current_color = st.session_state.doc_bookmarks.get(
+                (app_mode, st.session_state[page_key]), 0
+            )
+            if st.button(
+                f"{BOOKMARK_ICONS[current_color]} Bookmark",
+                key=f"cycle_bookmark_{app_mode}_{st.session_state[page_key]}",
+                use_container_width=True,
+            ):
+                next_color = (current_color + 1) % 4
+                updated_bookmarks = dict(st.session_state.doc_bookmarks)
+                bookmark_key = (app_mode, st.session_state[page_key])
+                if next_color == 0:
+                    updated_bookmarks.pop(bookmark_key, None)
+                else:
+                    updated_bookmarks[bookmark_key] = next_color
+                save_doc_bookmarks(updated_bookmarks)
+                st.rerun()
+        with nav_zoom:
+            st.select_slider(
+                "Zoom",
+                options=ZOOM_LEVELS,
+                format_func=lambda x: f"{x:g}×",
+                key="doc_zoom",
+                label_visibility="collapsed",
+            )
+
+        st.session_state.doc_positions[app_mode] = st.session_state[page_key]
+        st.caption(f"Page {st.session_state[page_key]} of {doc['pages']}")
+
+        render_document_image(
+            cached_document_page(app_mode, st.session_state[page_key]),
+            f"{doc['title']} — page {st.session_state[page_key]}",
+            st.session_state.doc_zoom,
+        )
+        st.caption(
+            "Reading position and zoom stay put while you switch pages or modes; "
+            "they reset if you reload the app. Freehand annotation on these pages "
+            "isn't available here — use the installed offline app for that."
+        )
 
 
 # Mirror a deliberate progress change to browser localStorage so the app can
@@ -1035,3 +1117,13 @@ if st.session_state.pop("storage_dirty", False):
         )
     elif local_storage.getItem(FLAGGED_STORAGE_KEY):
         local_storage.deleteItem(FLAGGED_STORAGE_KEY, key="mcq_ls_del_flagged")
+
+    _bookmarks_now = st.session_state.doc_bookmarks
+    if _bookmarks_now:
+        local_storage.setItem(
+            DOC_BOOKMARKS_STORAGE_KEY,
+            encode_doc_bookmarks(_bookmarks_now),
+            key="mcq_ls_set_bookmarks",
+        )
+    elif local_storage.getItem(DOC_BOOKMARKS_STORAGE_KEY):
+        local_storage.deleteItem(DOC_BOOKMARKS_STORAGE_KEY, key="mcq_ls_del_bookmarks")

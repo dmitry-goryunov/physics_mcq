@@ -463,3 +463,43 @@ def render_document_page(doc_id: str, page_number: int) -> bytes:
     output = io.BytesIO()
     image.save(output, format="PNG", optimize=True)
     return output.getvalue()
+
+
+def encode_doc_bookmarks(bookmarks: dict[tuple[str, int], int]) -> str:
+    """Encode per-document-page bookmark colors (1-3) as a compact URL-safe token."""
+    trimmed = {
+        f"{doc_id}|{page}": color
+        for (doc_id, page), color in bookmarks.items()
+        if color in (1, 2, 3)
+    }
+    if not trimmed:
+        return ""
+    raw = json.dumps(trimmed, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def decode_doc_bookmarks(token: str | None) -> dict[tuple[str, int], int]:
+    if not token:
+        return {}
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+
+    result: dict[tuple[str, int], int] = {}
+    for compound_key, color in data.items():
+        if not isinstance(compound_key, str) or "|" not in compound_key:
+            continue
+        doc_id, _, page_text = compound_key.rpartition("|")
+        if doc_id not in DOCUMENT_LOOKUP or color not in (1, 2, 3):
+            continue
+        try:
+            page = int(page_text)
+        except ValueError:
+            continue
+        result[(doc_id, page)] = color
+    return result
