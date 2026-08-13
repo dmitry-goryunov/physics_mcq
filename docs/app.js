@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const CACHE_NAME = "physics-mcq-cache-v17"; // keep in sync with sw.js
+  const CACHE_NAME = "physics-mcq-cache-v18"; // keep in sync with sw.js
   const PROGRESS_KEY = "physics_mcq_offline_progress_v1";
   const INCORRECT_KEY = "physics_mcq_offline_incorrect_v1";
   const OVERRIDES_KEY = "physics_mcq_offline_overrides_v1";
@@ -943,6 +943,27 @@
     const mount = els.main.querySelector('[data-mount="doc-annotate"]');
     if (!mount) return;
 
+    // .doc-page-frame shrink-wraps the page <img>, so the canvas can only be
+    // measured/sized correctly once that image has actually finished
+    // loading — before that its box has no reliable size at all (not just a
+    // "close enough" placeholder). Sizing against it and rescaling later is
+    // exactly what produced the reported bigger-and-shifted drawings, so
+    // don't touch the canvas at all until the image is ready; just wait and
+    // retry the whole mount once it settles.
+    const pageImg = mount.parentElement && mount.parentElement.querySelector("img");
+    if (pageImg && !pageImg.complete) {
+      pageImg.addEventListener(
+        "load",
+        () => {
+          if (els.main.querySelector('[data-mount="doc-annotate"]') === mount) {
+            mountDocAnnotateCanvas(currentKey);
+          }
+        },
+        { once: true }
+      );
+      return;
+    }
+
     const isNew = !docAnnotateCanvas;
     if (isNew) {
       docAnnotateCanvas = document.createElement("canvas");
@@ -970,23 +991,6 @@
 
     if (isNew || sizeChanged) {
       resizeDocAnnotateCanvas(docAnnotateCanvas, docAnnotateCtx, !isNew && !isNewPage);
-    }
-
-    // .doc-page-frame shrink-wraps the page <img>, so the canvas's rect above
-    // is only correct once that image has actually finished loading and the
-    // browser knows its real dimensions. On a page never seen before (not
-    // yet browser-cached), the fetch is still in flight at this point, so
-    // the measurement just taken can be stale — re-run this same mount pass
-    // once the image settles to pick up the real size.
-    const pageImg = mount.parentElement && mount.parentElement.querySelector("img");
-    if (pageImg && !pageImg.complete) {
-      pageImg.addEventListener(
-        "load",
-        () => {
-          if (docAnnotateCurrentKey === currentKey) mountDocAnnotateCanvas(currentKey);
-        },
-        { once: true }
-      );
     }
 
     if (isNewPage) {
