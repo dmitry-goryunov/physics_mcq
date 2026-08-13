@@ -510,6 +510,17 @@ button {
   font-weight: 600;
 }
 
+.eraser-size-select {
+  width: auto;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: #fff;
+  color: var(--text);
+}
+
 .scratch-pad-mount {
   flex: 1;
   display: flex;

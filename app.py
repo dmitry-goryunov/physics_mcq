@@ -281,6 +281,12 @@ _SCRATCH_PAD_HTML = """
     <span>Scratch pad</span>
     <div style="display:flex; gap:0.4rem;">
       <button id="eraseBtn" type="button" style="padding:0.3rem 0.7rem; font-size:0.8rem; font-weight:600; border:1px solid #d8dbe3; border-radius:8px; background:#fff; cursor:pointer;">🧹 Eraser</button>
+      <select id="eraseSizeSelect" title="Eraser size" style="padding:0.3rem 0.5rem; font-size:0.8rem; font-weight:600; border:1px solid #d8dbe3; border-radius:8px; background:#fff; color:#1f2430;">
+        <option value="10">S</option>
+        <option value="18" selected>M</option>
+        <option value="30">L</option>
+        <option value="50">XL</option>
+      </select>
       <button id="clearBtn" type="button" style="padding:0.3rem 0.7rem; font-size:0.8rem; font-weight:600; border:1px solid #d8dbe3; border-radius:8px; background:#fff; cursor:pointer;">Clear</button>
     </div>
   </div>
@@ -292,8 +298,10 @@ _SCRATCH_PAD_HTML = """
   const ctx = canvas.getContext("2d");
   const clearBtn = document.getElementById("clearBtn");
   const eraseBtn = document.getElementById("eraseBtn");
+  const eraseSizeSelect = document.getElementById("eraseSizeSelect");
   const container = canvas.closest("div[data-pad-key]");
   let erasing = false;
+  let eraseSize = parseInt(eraseSizeSelect.value, 10);
 
   function sizeCanvas(preserveContent) {
     const rect = canvas.getBoundingClientRect();
@@ -348,9 +356,7 @@ _SCRATCH_PAD_HTML = """
 
   function applyStrokeMode(pressure) {
     ctx.globalCompositeOperation = erasing ? "destination-out" : "source-over";
-    ctx.lineWidth = erasing
-      ? Math.max(6, (pressure || 0.5) * 16)
-      : Math.max(1.2, (pressure || 0.5) * 3.5);
+    ctx.lineWidth = erasing ? eraseSize : Math.max(1.2, (pressure || 0.5) * 3.5);
   }
 
   canvas.addEventListener("pointerdown", (e) => {
@@ -387,6 +393,10 @@ _SCRATCH_PAD_HTML = """
     eraseBtn.style.background = erasing ? "#4f46e5" : "#fff";
     eraseBtn.style.color = erasing ? "#fff" : "#000";
     eraseBtn.style.borderColor = erasing ? "#4f46e5" : "#d8dbe3";
+  });
+
+  eraseSizeSelect.addEventListener("change", () => {
+    eraseSize = parseInt(eraseSizeSelect.value, 10) || eraseSize;
   });
 })();
 </script>

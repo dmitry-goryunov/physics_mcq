@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const CACHE_NAME = "physics-mcq-cache-v21"; // keep in sync with sw.js
+  const CACHE_NAME = "physics-mcq-cache-v22"; // keep in sync with sw.js
   const PROGRESS_KEY = "physics_mcq_offline_progress_v1";
   const INCORRECT_KEY = "physics_mcq_offline_incorrect_v1";
   const OVERRIDES_KEY = "physics_mcq_offline_overrides_v1";
@@ -80,6 +80,7 @@
     docDrawMode: false,
     docEraseMode: false,
     scratchEraseMode: false,
+    eraseSize: 18, // shared across scratch pad + both annotation overlays
     selectedTopic: null,
     mode: "count",
     count: 10,
@@ -102,6 +103,12 @@
 
   const ZOOM_LEVELS = [1, 1.25, 1.5, 1.75, 2];
   const BASE_IMAGE_HEIGHT = 300;
+  const ERASER_SIZES = [
+    { value: 10, label: "S" },
+    { value: 18, label: "M" },
+    { value: 30, label: "L" },
+    { value: 50, label: "XL" },
+  ];
 
   const key = (topic, number) => `${topic} ${number}`;
   const docPageKey = (docId, page) => `${docId}_${page}`;
@@ -542,10 +549,17 @@
   function applyStrokeMode(ctx, pressure, isErasing, scale) {
     const s = scale || 1;
     ctx.globalCompositeOperation = isErasing ? "destination-out" : "source-over";
-    ctx.lineWidth =
-      (isErasing
-        ? Math.max(6, (pressure || 0.5) * 16)
-        : Math.max(1.2, (pressure || 0.5) * 3.5)) * s;
+    ctx.lineWidth = (isErasing ? state.eraseSize : Math.max(1.2, (pressure || 0.5) * 3.5)) * s;
+  }
+
+  function eraserSizeSelectHtml(action) {
+    const options = ERASER_SIZES.map(
+      (size) =>
+        `<option value="${size.value}" ${
+          size.value === state.eraseSize ? "selected" : ""
+        }>${size.label}</option>`
+    ).join("");
+    return `<select class="eraser-size-select" data-action="${action}" title="Eraser size">${options}</select>`;
   }
 
   function attachScratchListeners(canvas, ctx) {
@@ -1333,6 +1347,7 @@
           ? "background:var(--primary); border-color:var(--primary); color:#fff;"
           : ""
       }">${state.questionDrawMode && state.questionEraseMode ? "🧹 Erasing on" : "🧹 Eraser"}</button>
+      ${eraserSizeSelectHtml("set-erase-size")}
       <button type="button" class="btn image-annotate-clear" data-action="clear-question-annotate">Clear</button>
     `;
 
@@ -1440,6 +1455,7 @@
                     ? "background:var(--primary); border-color:var(--primary); color:#fff;"
                     : ""
                 }">🧹 Eraser</button>
+                ${eraserSizeSelectHtml("set-erase-size")}
                 <button type="button" class="btn scratch-pad-clear" data-action="clear-scratch-pad">Clear</button>
               </div>
             </div>
@@ -1563,6 +1579,7 @@
               ? "background:var(--primary); border-color:var(--primary); color:#fff;"
               : ""
           }">${state.docDrawMode && state.docEraseMode ? "🧹 Erasing on" : "🧹 Eraser"}</button>
+          ${eraserSizeSelectHtml("set-erase-size")}
           <button type="button" class="btn" data-action="clear-doc-annotate">Clear</button>
         </div>
         <div class="doc-page-area">
@@ -1662,6 +1679,10 @@
         break;
       case "doc-zoom":
         state.docZoom = parseFloat(event.target.value) || 1;
+        render();
+        break;
+      case "set-erase-size":
+        state.eraseSize = parseInt(event.target.value, 10) || state.eraseSize;
         render();
         break;
       case "doc-page-input": {
