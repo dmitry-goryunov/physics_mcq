@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const CACHE_NAME = "physics-mcq-cache-v18"; // keep in sync with sw.js
+  const CACHE_NAME = "physics-mcq-cache-v19"; // keep in sync with sw.js
   const PROGRESS_KEY = "physics_mcq_offline_progress_v1";
   const INCORRECT_KEY = "physics_mcq_offline_incorrect_v1";
   const OVERRIDES_KEY = "physics_mcq_offline_overrides_v1";
@@ -66,7 +66,6 @@
   let docAnnotateDrawing = false;
   let docAnnotateLast = null;
   let docAnnotateCurrentKey = null;
-  let docAnnotateLastRect = null;
   let docAnnotateSaveDebounce = null;
 
   const MODE_QUIZ = "quiz";
@@ -871,12 +870,24 @@
     }, 400);
   }
 
-  function attachDocAnnotateListeners(canvas, ctx) {
-    const pointerPos = (e) => {
-      const r = canvas.getBoundingClientRect();
-      return { x: e.clientX - r.left, y: e.clientY - r.top };
+  // Maps a pointer event into the canvas's BACKING-STORE pixel space (which,
+  // per mountDocAnnotateCanvas below, always equals the page image's own
+  // natural size — not the CSS-displayed size) via a plain ratio. This is
+  // deliberately independent of devicePixelRatio and current zoom: whatever
+  // the relationship between the CSS box and the backing store is at this
+  // exact instant, the ratio captures it correctly.
+  function docCanvasPoint(canvas, e) {
+    const r = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / r.width;
+    const scaleY = canvas.height / r.height;
+    return {
+      x: (e.clientX - r.left) * scaleX,
+      y: (e.clientY - r.top) * scaleY,
+      scale: (scaleX + scaleY) / 2,
     };
+  }
 
+  function attachDocAnnotateListeners(canvas, ctx) {
     canvas.addEventListener("pointerdown", (e) => {
       docAnnotateDrawing = true;
       try {
@@ -884,13 +895,14 @@
       } catch (err) {
         // see attachScratchListeners
       }
-      docAnnotateLast = pointerPos(e);
-      ctx.lineWidth = Math.max(1.2, (e.pressure || 0.5) * 3.5);
+      const p = docCanvasPoint(canvas, e);
+      docAnnotateLast = p;
+      ctx.lineWidth = Math.max(1.2, (e.pressure || 0.5) * 3.5) * p.scale;
     });
     canvas.addEventListener("pointermove", (e) => {
       if (!docAnnotateDrawing) return;
-      const p = pointerPos(e);
-      ctx.lineWidth = Math.max(1.2, (e.pressure || 0.5) * 3.5);
+      const p = docCanvasPoint(canvas, e);
+      ctx.lineWidth = Math.max(1.2, (e.pressure || 0.5) * 3.5) * p.scale;
       ctx.beginPath();
       ctx.moveTo(docAnnotateLast.x, docAnnotateLast.y);
       ctx.lineTo(p.x, p.y);
@@ -906,52 +918,27 @@
     );
   }
 
-  function resizeDocAnnotateCanvas(canvas, ctx, preserveContent) {
-    const rect = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const newWidth = Math.max(1, Math.round(rect.width * dpr));
-    const newHeight = Math.max(1, Math.round(rect.height * dpr));
-
-    let snapshot = null;
-    if (preserveContent && canvas.width > 0 && canvas.height > 0) {
-      snapshot = document.createElement("canvas");
-      snapshot.width = canvas.width;
-      snapshot.height = canvas.height;
-      snapshot.getContext("2d").drawImage(canvas, 0, 0);
-    }
-
-    canvas.width = newWidth;
-    canvas.height = newHeight;
-    ctx.scale(dpr, dpr);
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.strokeStyle = "#e11d48";
-
-    if (snapshot) {
-      ctx.drawImage(snapshot, 0, 0, snapshot.width, snapshot.height, 0, 0, newWidth, newHeight);
-    }
-
-    docAnnotateLastRect = { width: rect.width, height: rect.height };
-  }
-
   // Unlike mountAnnotateCanvas (cleared on every new question), a new page
   // here triggers an async IndexedDB lookup so a previously saved drawing for
   // that exact page reappears. docAnnotateCurrentKey is checked after the
   // lookup resolves so a stale response can't land on a page the user has
   // since navigated away from.
+  //
+  // The backing store is always sized to the page image's own NATURAL pixel
+  // dimensions (pageImg.naturalWidth/Height) — not the CSS-displayed size
+  // times devicePixelRatio. That size never changes for a given page, so
+  // zoom/viewport changes never need to touch or rescale the canvas at all;
+  // CSS (width/height:100%, tracking the image) handles display scaling on
+  // its own. This also means a saved snapshot always has EXACTLY the same
+  // pixel dimensions as the canvas that loads it back in — no rescale, ever
+  // — which is what a viewport/DPR-dependent size previously couldn't
+  // guarantee and is why reloaded drawings could come back bigger/shifted.
   function mountDocAnnotateCanvas(currentKey) {
     const mount = els.main.querySelector('[data-mount="doc-annotate"]');
     if (!mount) return;
 
-    // .doc-page-frame shrink-wraps the page <img>, so the canvas can only be
-    // measured/sized correctly once that image has actually finished
-    // loading — before that its box has no reliable size at all (not just a
-    // "close enough" placeholder). Sizing against it and rescaling later is
-    // exactly what produced the reported bigger-and-shifted drawings, so
-    // don't touch the canvas at all until the image is ready; just wait and
-    // retry the whole mount once it settles.
     const pageImg = mount.parentElement && mount.parentElement.querySelector("img");
-    if (pageImg && !pageImg.complete) {
+    if (pageImg && (!pageImg.complete || !pageImg.naturalWidth)) {
       pageImg.addEventListener(
         "load",
         () => {
@@ -968,13 +955,10 @@
     if (isNew) {
       docAnnotateCanvas = document.createElement("canvas");
       docAnnotateCanvas.className = "image-annotate-canvas";
-    }
-    mount.appendChild(docAnnotateCanvas);
-
-    if (isNew) {
       docAnnotateCtx = docAnnotateCanvas.getContext("2d");
       attachDocAnnotateListeners(docAnnotateCanvas, docAnnotateCtx);
     }
+    mount.appendChild(docAnnotateCanvas);
 
     docAnnotateCanvas.style.pointerEvents = state.docDrawMode ? "auto" : "none";
     docAnnotateCanvas.style.touchAction = state.docDrawMode ? "none" : "auto";
@@ -983,34 +967,20 @@
     const isNewPage = currentKey !== docAnnotateCurrentKey;
     docAnnotateCurrentKey = currentKey;
 
-    const rect = docAnnotateCanvas.getBoundingClientRect();
-    const sizeChanged =
-      !docAnnotateLastRect ||
-      Math.abs(rect.width - docAnnotateLastRect.width) > 0.5 ||
-      Math.abs(rect.height - docAnnotateLastRect.height) > 0.5;
+    if (isNew || isNewPage) {
+      docAnnotateCanvas.width = pageImg ? pageImg.naturalWidth : docAnnotateCanvas.width || 1;
+      docAnnotateCanvas.height = pageImg ? pageImg.naturalHeight : docAnnotateCanvas.height || 1;
+      docAnnotateCtx.lineCap = "round";
+      docAnnotateCtx.lineJoin = "round";
+      docAnnotateCtx.strokeStyle = "#e11d48";
 
-    if (isNew || sizeChanged) {
-      resizeDocAnnotateCanvas(docAnnotateCanvas, docAnnotateCtx, !isNew && !isNewPage);
-    }
-
-    if (isNewPage) {
-      docAnnotateCtx.clearRect(0, 0, docAnnotateCanvas.width, docAnnotateCanvas.height);
       loadAnnotationSnapshot(currentKey).then((dataUrl) => {
         if (docAnnotateCurrentKey !== currentKey || !dataUrl) return;
         const img = new Image();
         img.onload = () => {
           if (docAnnotateCurrentKey !== currentKey) return;
-          docAnnotateCtx.drawImage(
-            img,
-            0,
-            0,
-            img.width,
-            img.height,
-            0,
-            0,
-            docAnnotateCanvas.width,
-            docAnnotateCanvas.height
-          );
+          // Same natural size by construction — a plain 1:1 copy, no scaling.
+          docAnnotateCtx.drawImage(img, 0, 0);
         };
         img.src = dataUrl;
       });
