@@ -420,14 +420,24 @@ _DOCUMENT_SOURCES: list[dict] = [
         "filename": "ESAT_Guide_Physics.pdf",
     },
     {
-        "id": "esat_maths_1",
-        "title": "ESAT Guide — Mathematics 1",
-        "filename": "ESAT_Guide_Mathematics_1.pdf",
-    },
-    {
         "id": "tmua_m2_notes",
         "title": "Notes on Mathematics — for TMUA and ESAT M2",
         "filename": "Notes_on_Mathematics_-for_TMUA_and_ESAT_M2.pdf",
+    },
+    {
+        "id": "speed_recall_physics",
+        "title": "ESAT Physics — Speed Recall Guide",
+        "filename": "ESAT_Physics_Speed_Recall_Guide_Revised.pdf",
+    },
+    {
+        "id": "speed_recall_maths_1",
+        "title": "ESAT Maths 1 — Speed Recall Guide",
+        "filename": "ESAT_Mathematics_1_Speed_Recall_Guide_Revised.pdf",
+    },
+    {
+        "id": "speed_recall_maths_2",
+        "title": "ESAT Maths 2 — Speed Recall Guide",
+        "filename": "ESAT_Mathematics_2_Speed_Recall_Guide_Revised.pdf",
     },
 ]
 
