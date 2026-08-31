@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const CACHE_NAME = "physics-mcq-cache-v23"; // keep in sync with sw.js
+  const CACHE_NAME = "physics-mcq-cache-v24"; // keep in sync with sw.js
   const PROGRESS_KEY = "physics_mcq_offline_progress_v1";
   const INCORRECT_KEY = "physics_mcq_offline_incorrect_v1";
   const OVERRIDES_KEY = "physics_mcq_offline_overrides_v1";
@@ -219,11 +219,83 @@
     }
   }
 
-  function loadProgress() {
+  // ---------- durable key-value store (IndexedDB, mirrored from localStorage) ----------
+  //
+  // localStorage.setItem() returns immediately, but on Android's WebView/Chrome
+  // the actual write to disk can be deferred by the browser engine. If the OS
+  // kills the app process abruptly (e.g. swiped away from Recent Apps) before
+  // that deferred write lands, the update is lost even though it "saved"
+  // successfully from the script's point of view — this is the reported bug
+  // (progress reverting to an older save after closing the app normally, but
+  // NOT after a full power cycle, which gives the OS time to flush pending
+  // writes). IndexedDB uses a write-ahead log and is built to be far more
+  // resistant to exactly this kind of abrupt termination.
+  //
+  // Every save below now writes to BOTH: localStorage synchronously (as
+  // before, unchanged), and IndexedDB as a fire-and-forget async write —
+  // pure defense in depth, since localStorage keeps working exactly as it
+  // did if IndexedDB is unavailable for any reason. Loads prefer IndexedDB
+  // and fall back to (and migrate from) localStorage, so existing users'
+  // progress carries over automatically on first load after this update.
+
+  const STATE_DB_NAME = "physics_mcq_state";
+  const STATE_STORE = "kv";
+  let stateDbPromise = null;
+
+  function openStateDb() {
+    if (!stateDbPromise) {
+      stateDbPromise = new Promise((resolve, reject) => {
+        const req = indexedDB.open(STATE_DB_NAME, 1);
+        req.onupgradeneeded = () => {
+          if (!req.result.objectStoreNames.contains(STATE_STORE)) {
+            req.result.createObjectStore(STATE_STORE);
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+    return stateDbPromise;
+  }
+
+  async function idbGet(key) {
+    try {
+      const db = await openStateDb();
+      return await new Promise((resolve, reject) => {
+        const tx = db.transaction(STATE_STORE, "readonly");
+        const req = tx.objectStore(STATE_STORE).get(key);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    } catch (err) {
+      return undefined;
+    }
+  }
+
+  async function idbSet(key, value) {
+    try {
+      const db = await openStateDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(STATE_STORE, "readwrite");
+        tx.objectStore(STATE_STORE).put(value, key);
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch (err) {
+      // Best-effort; localStorage's copy still covers this save.
+    }
+  }
+
+  async function loadProgress() {
+    const idbPairs = await idbGet(PROGRESS_KEY);
+    if (Array.isArray(idbPairs)) {
+      return new Set(idbPairs.map(([topic, number]) => key(topic, Number(number))));
+    }
     try {
       const raw = localStorage.getItem(PROGRESS_KEY);
       if (!raw) return new Set();
       const pairs = JSON.parse(raw);
+      if (pairs.length) idbSet(PROGRESS_KEY, pairs);
       return new Set(pairs.map(([topic, number]) => key(topic, Number(number))));
     } catch (err) {
       return new Set();
@@ -236,13 +308,21 @@
       return [topic, Number(number)];
     });
     localStorage.setItem(PROGRESS_KEY, JSON.stringify(pairs));
+    idbSet(PROGRESS_KEY, pairs);
   }
 
-  function loadIncorrectCounts() {
+  async function loadIncorrectCounts() {
+    const idbObj = await idbGet(INCORRECT_KEY);
+    if (idbObj && typeof idbObj === "object") {
+      return new Map(
+        Object.entries(idbObj).filter(([, count]) => Number.isInteger(count) && count > 0)
+      );
+    }
     try {
       const raw = localStorage.getItem(INCORRECT_KEY);
       if (!raw) return new Map();
       const obj = JSON.parse(raw);
+      if (Object.keys(obj).length) idbSet(INCORRECT_KEY, obj);
       return new Map(
         Object.entries(obj).filter(([, count]) => Number.isInteger(count) && count > 0)
       );
@@ -254,18 +334,22 @@
   function saveIncorrectCounts() {
     const obj = Object.fromEntries(incorrectCounts);
     localStorage.setItem(INCORRECT_KEY, JSON.stringify(obj));
+    idbSet(INCORRECT_KEY, obj);
   }
 
   const VALID_ANSWERS = new Set(["A", "B", "C", "D"]);
 
-  function loadAnswerOverrides() {
+  async function loadAnswerOverrides() {
+    const idbObj = await idbGet(OVERRIDES_KEY);
+    if (idbObj && typeof idbObj === "object") {
+      return new Map(Object.entries(idbObj).filter(([, answer]) => VALID_ANSWERS.has(answer)));
+    }
     try {
       const raw = localStorage.getItem(OVERRIDES_KEY);
       if (!raw) return new Map();
       const obj = JSON.parse(raw);
-      return new Map(
-        Object.entries(obj).filter(([, answer]) => VALID_ANSWERS.has(answer))
-      );
+      if (Object.keys(obj).length) idbSet(OVERRIDES_KEY, obj);
+      return new Map(Object.entries(obj).filter(([, answer]) => VALID_ANSWERS.has(answer)));
     } catch (err) {
       return new Map();
     }
@@ -274,13 +358,19 @@
   function saveAnswerOverrides() {
     const obj = Object.fromEntries(answerOverrides);
     localStorage.setItem(OVERRIDES_KEY, JSON.stringify(obj));
+    idbSet(OVERRIDES_KEY, obj);
   }
 
-  function loadFlags() {
+  async function loadFlags() {
+    const idbPairs = await idbGet(FLAGGED_KEY);
+    if (Array.isArray(idbPairs)) {
+      return new Set(idbPairs.map(([topic, number]) => key(topic, Number(number))));
+    }
     try {
       const raw = localStorage.getItem(FLAGGED_KEY);
       if (!raw) return new Set();
       const pairs = JSON.parse(raw);
+      if (pairs.length) idbSet(FLAGGED_KEY, pairs);
       return new Set(pairs.map(([topic, number]) => key(topic, Number(number))));
     } catch (err) {
       return new Set();
@@ -293,13 +383,19 @@
       return [topic, Number(number)];
     });
     localStorage.setItem(FLAGGED_KEY, JSON.stringify(pairs));
+    idbSet(FLAGGED_KEY, pairs);
   }
 
-  function loadDocBookmarks() {
+  async function loadDocBookmarks() {
+    const idbPairs = await idbGet(DOC_BOOKMARKS_KEY);
+    if (Array.isArray(idbPairs)) {
+      return new Map(idbPairs.filter(([, color]) => color === 1 || color === 2 || color === 3));
+    }
     try {
       const raw = localStorage.getItem(DOC_BOOKMARKS_KEY);
       if (!raw) return new Map();
       const pairs = JSON.parse(raw);
+      if (pairs.length) idbSet(DOC_BOOKMARKS_KEY, pairs);
       return new Map(pairs.filter(([, color]) => color === 1 || color === 2 || color === 3));
     } catch (err) {
       return new Map();
@@ -307,7 +403,9 @@
   }
 
   function saveDocBookmarks() {
-    localStorage.setItem(DOC_BOOKMARKS_KEY, JSON.stringify(Array.from(docBookmarks.entries())));
+    const pairs = Array.from(docBookmarks.entries());
+    localStorage.setItem(DOC_BOOKMARKS_KEY, JSON.stringify(pairs));
+    idbSet(DOC_BOOKMARKS_KEY, pairs);
   }
 
   // ---------- domain logic (mirrors quiz_core.py) ----------
@@ -2107,11 +2205,13 @@
   // ---------- boot ----------
 
   async function boot() {
-    completed = loadProgress();
-    incorrectCounts = loadIncorrectCounts();
-    answerOverrides = loadAnswerOverrides();
-    flagged = loadFlags();
-    docBookmarks = loadDocBookmarks();
+    [completed, incorrectCounts, answerOverrides, flagged, docBookmarks] = await Promise.all([
+      loadProgress(),
+      loadIncorrectCounts(),
+      loadAnswerOverrides(),
+      loadFlags(),
+      loadDocBookmarks(),
+    ]);
     await Promise.all([loadBank(), loadAssetManifest(), loadDocuments()]);
     state.selectedTopic = TOPIC_NAMES[0];
     render();
