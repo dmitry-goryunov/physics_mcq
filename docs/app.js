@@ -1,12 +1,13 @@
 (() => {
   "use strict";
 
-  const CACHE_NAME = "physics-mcq-cache-v24"; // keep in sync with sw.js
+  const CACHE_NAME = "physics-mcq-cache-v25"; // keep in sync with sw.js
   const PROGRESS_KEY = "physics_mcq_offline_progress_v1";
   const INCORRECT_KEY = "physics_mcq_offline_incorrect_v1";
   const OVERRIDES_KEY = "physics_mcq_offline_overrides_v1";
   const FLAGGED_KEY = "physics_mcq_offline_flagged_v1";
   const DOC_BOOKMARKS_KEY = "physics_mcq_offline_doc_bookmarks_v1";
+  const QUIZ_SESSION_KEY = "physics_mcq_offline_quiz_session_v1";
   const LOG_COLUMNS = ["topic", "question_number", "page", "correct_answer"];
 
   const els = {
@@ -406,6 +407,49 @@
     const pairs = Array.from(docBookmarks.entries());
     localStorage.setItem(DOC_BOOKMARKS_KEY, JSON.stringify(pairs));
     idbSet(DOC_BOOKMARKS_KEY, pairs);
+  }
+
+  // The active quiz session (which questions, current position, what's been
+  // answered so far in THIS run) was never persisted at all — only the
+  // completed-question ledger above was. That meant any reload mid-quiz,
+  // including one Android triggers by reclaiming a backgrounded tab's memory
+  // (reported as "I scroll off the app without closing it and it resets"),
+  // threw away the whole session even though already-correct answers within
+  // it were separately recorded. Same dual-write pattern as everything above.
+  async function loadQuizSession() {
+    const idbValue = await idbGet(QUIZ_SESSION_KEY);
+    if (idbValue !== undefined) return idbValue;
+    try {
+      const raw = localStorage.getItem(QUIZ_SESSION_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      idbSet(QUIZ_SESSION_KEY, parsed);
+      return parsed;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function saveQuizSession() {
+    const value = state.quiz;
+    if (value) {
+      localStorage.setItem(QUIZ_SESSION_KEY, JSON.stringify(value));
+    } else {
+      localStorage.removeItem(QUIZ_SESSION_KEY);
+    }
+    idbSet(QUIZ_SESSION_KEY, value);
+  }
+
+  // Defends against a stale/corrupt restored session (e.g. the question bank
+  // changed since it was saved) crashing renderMain() instead of just being
+  // discarded.
+  function isValidRestoredQuiz(quiz) {
+    if (!quiz || typeof quiz !== "object") return false;
+    if (!Array.isArray(quiz.keys) || quiz.keys.length === 0) return false;
+    if (typeof quiz.position !== "number" || quiz.position < 0) return false;
+    return quiz.keys.every(
+      (k) => Array.isArray(k) && k.length === 2 && QUESTION_LOOKUP.has(key(k[0], k[1]))
+    );
   }
 
   // ---------- domain logic (mirrors quiz_core.py) ----------
@@ -1412,6 +1456,7 @@
   }
 
   function renderMain() {
+    saveQuizSession();
     const quiz = state.quiz;
     if (!quiz) {
       els.main.innerHTML = `<div class="empty-state">Choose a topic and number of questions in the sidebar, then start a quiz.</div>`;
@@ -2205,15 +2250,21 @@
   // ---------- boot ----------
 
   async function boot() {
-    [completed, incorrectCounts, answerOverrides, flagged, docBookmarks] = await Promise.all([
-      loadProgress(),
-      loadIncorrectCounts(),
-      loadAnswerOverrides(),
-      loadFlags(),
-      loadDocBookmarks(),
-    ]);
+    let restoredQuiz;
+    [completed, incorrectCounts, answerOverrides, flagged, docBookmarks, restoredQuiz] =
+      await Promise.all([
+        loadProgress(),
+        loadIncorrectCounts(),
+        loadAnswerOverrides(),
+        loadFlags(),
+        loadDocBookmarks(),
+        loadQuizSession(),
+      ]);
     await Promise.all([loadBank(), loadAssetManifest(), loadDocuments()]);
     state.selectedTopic = TOPIC_NAMES[0];
+    if (isValidRestoredQuiz(restoredQuiz)) {
+      state.quiz = restoredQuiz;
+    }
     render();
     refreshOfflineStatus();
 
@@ -2222,6 +2273,27 @@
     document.addEventListener("fullscreenchange", () => {
       if (state.appMode !== MODE_QUIZ) render();
     });
+
+    // Belt-and-braces re-save right as the app backgrounds. Every mutation
+    // already saves immediately, so in the common case there's nothing new
+    // to flush here — this exists for the case Android reclaims a
+    // backgrounded tab's memory and reloads it later, which needs the save
+    // to have actually started before that happens. "visibilitychange" is
+    // the reliable signal for this on Android; "pagehide" is listened for
+    // too since it can fire in cases visibilitychange doesn't (e.g. some
+    // back/forward navigations), per Chrome's Page Lifecycle guidance.
+    const saveEverything = () => {
+      saveProgress();
+      saveIncorrectCounts();
+      saveAnswerOverrides();
+      saveFlags();
+      saveDocBookmarks();
+      saveQuizSession();
+    };
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") saveEverything();
+    });
+    window.addEventListener("pagehide", saveEverything);
 
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("sw.js").catch(() => {});
