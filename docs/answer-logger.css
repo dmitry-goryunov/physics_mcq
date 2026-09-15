@@ -1,0 +1,478 @@
+/* Ported from https://dmitry-goryunov.github.io/answer_logger/ (styles.css).
+   Every rule is scoped under .answer-logger and every class/variable is
+   prefixed al- so nothing here can leak into (or be overridden by) the rest
+   of the app's styles — the original used bare element selectors (body,
+   table, button,input,select, ...) and unprefixed :root custom properties
+   (including --muted, which collides with a token style.css already
+   defines), both of which would otherwise apply page-wide. */
+
+.answer-logger {
+  --al-navy: #17365d;
+  --al-blue: #18799b;
+  --al-sky: #dcecf4;
+  --al-ink: #182536;
+  --al-muted: #637082;
+  --al-line: #d8e0e8;
+  --al-paper: #f4f7fa;
+  --al-white: #fff;
+  --al-green: #17755b;
+  --al-amber: #b9761b;
+
+  background: var(--al-paper);
+  color: var(--al-ink);
+  font-family: Inter, "Segoe UI", Arial, sans-serif;
+}
+
+.answer-logger button,
+.answer-logger input,
+.answer-logger select {
+  font: inherit;
+}
+
+.answer-logger .al-shell {
+  max-width: 1240px;
+  margin: auto;
+  padding: 32px 24px 48px;
+}
+
+.answer-logger header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 24px;
+  margin-bottom: 28px;
+  flex-wrap: wrap;
+}
+
+.answer-logger .al-eyebrow {
+  margin: 0 0 8px;
+  color: var(--al-blue);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.answer-logger h1 {
+  margin: 0;
+  color: var(--al-navy);
+  font-size: clamp(32px, 6vw, 56px);
+  line-height: 0.95;
+  letter-spacing: -0.045em;
+}
+
+.answer-logger .al-intro {
+  max-width: 660px;
+  margin: 18px 0 0;
+  color: var(--al-muted);
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.answer-logger .al-stats {
+  display: flex;
+  gap: 10px;
+}
+
+.answer-logger .al-stat {
+  min-width: 130px;
+  padding: 16px 18px;
+  border-left: 4px solid var(--al-blue);
+  background: var(--al-white);
+  box-shadow: 0 8px 30px #17365d10;
+}
+
+.answer-logger .al-stat span {
+  display: block;
+  color: var(--al-navy);
+  font-size: 28px;
+  font-weight: 800;
+}
+
+.answer-logger .al-stat small {
+  color: var(--al-muted);
+}
+
+.answer-logger .al-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.answer-logger .al-card {
+  background: var(--al-white);
+  border: 1px solid var(--al-line);
+  border-radius: 14px;
+  box-shadow: 0 12px 40px #17365d0c;
+  padding: 22px;
+}
+
+.answer-logger form.al-card {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.answer-logger .al-full {
+  grid-column: 1 / -1;
+}
+
+.answer-logger label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--al-navy);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.answer-logger input,
+.answer-logger select {
+  width: 100%;
+  height: 46px;
+  padding: 0 13px;
+  border: 1px solid #b8c5d1;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--al-ink);
+  outline: none;
+}
+
+.answer-logger input:focus,
+.answer-logger select:focus {
+  border-color: var(--al-blue);
+  box-shadow: 0 0 0 3px #18799b1c;
+}
+
+.answer-logger button {
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.answer-logger .al-secondary {
+  height: 40px;
+  padding: 0 14px;
+  border: 1px solid #b8c5d1;
+  background: #fff;
+  color: var(--al-navy);
+  white-space: nowrap;
+}
+
+.answer-logger .al-timer-panel {
+  padding: 22px;
+  border-radius: 11px;
+  background: var(--al-navy);
+  color: #fff;
+  text-align: center;
+}
+
+.answer-logger .al-timer-label {
+  display: block;
+  color: #bcd7e7;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.15em;
+}
+
+.answer-logger #alTimer {
+  display: block;
+  margin: 7px 0 14px;
+  font-variant-numeric: tabular-nums;
+  font-size: 48px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+
+.answer-logger .al-timer-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
+.answer-logger .al-timer-actions button {
+  min-width: 110px;
+  padding: 10px 14px;
+  background: #fff;
+  color: var(--al-navy);
+}
+
+.answer-logger .al-timer-actions .al-ghost {
+  border: 1px solid #ffffff55;
+  background: transparent;
+  color: #fff;
+}
+
+.answer-logger .al-timer-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.answer-logger .al-submit {
+  min-height: 50px;
+  background: var(--al-blue);
+  color: #fff;
+  font-size: 15px;
+}
+
+.answer-logger .al-submit:hover {
+  background: #126985;
+}
+
+.answer-logger .al-status {
+  min-height: 18px;
+  margin: 0;
+  color: var(--al-green);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.answer-logger .al-hint {
+  margin: 0;
+  color: var(--al-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.answer-logger .al-log-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.answer-logger .al-log-heading-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.answer-logger h2 {
+  margin: 0;
+  color: var(--al-navy);
+  font-size: 22px;
+}
+
+.answer-logger .al-table-wrap {
+  min-height: 335px;
+  margin-top: 18px;
+  overflow: auto;
+}
+
+.answer-logger table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.answer-logger th {
+  padding: 9px 6px;
+  border-bottom: 2px solid var(--al-navy);
+  color: var(--al-navy);
+  text-align: left;
+  font-size: 11.5px;
+}
+
+.answer-logger td {
+  padding: 6px;
+  border-bottom: 1px solid var(--al-line);
+}
+
+.answer-logger tbody tr {
+  cursor: pointer;
+}
+
+.answer-logger tbody tr:hover {
+  background: #f7fafc;
+}
+
+.answer-logger .al-paper-cell {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--al-muted);
+  font-size: 12px;
+}
+
+.answer-logger .al-q-cell {
+  width: 30px;
+  color: var(--al-navy);
+  font-weight: 800;
+  text-align: right;
+}
+
+.answer-logger .al-time-cell,
+.answer-logger .al-total-cell {
+  width: 58px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.answer-logger .al-total-cell {
+  color: var(--al-muted);
+}
+
+.answer-logger .al-cell-input {
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid #cdd8e2;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.answer-logger .al-answer-input {
+  min-width: 64px;
+  max-width: 88px;
+  font-weight: 750;
+  text-transform: none;
+}
+
+.answer-logger .al-notes-input {
+  min-width: 120px;
+}
+
+.answer-logger tbody tr.al-active {
+  background: #fff6e3;
+  box-shadow: inset 3px 0 0 var(--al-amber);
+}
+
+.answer-logger tbody tr.al-active:hover {
+  background: #fff2d6;
+}
+
+.answer-logger tbody tr.al-active .al-time-cell {
+  color: var(--al-amber);
+  font-weight: 800;
+}
+
+.answer-logger tbody tr.al-active.al-counting .al-time-cell::after {
+  content: " \25cf";
+  font-size: 9px;
+  vertical-align: middle;
+}
+
+.answer-logger tbody tr.al-recorded {
+  background: #e9f5ef;
+}
+
+.answer-logger tbody tr.al-recorded:hover {
+  background: #e0f0e8;
+}
+
+.answer-logger tbody tr.al-recorded .al-q-cell,
+.answer-logger tbody tr.al-recorded .al-time-cell {
+  color: var(--al-green);
+}
+
+.answer-logger tbody tr.al-recorded .al-cell-input {
+  border-color: #bcdccd;
+  background: #f6fbf8;
+}
+
+.answer-logger tbody tr.al-recorded.al-active {
+  background: #eef6e6;
+  box-shadow: inset 3px 0 0 var(--al-amber);
+}
+
+.answer-logger .al-record-btn {
+  padding: 7px 9px;
+  border: 1px solid #b8c5d1;
+  background: #fff;
+  color: var(--al-navy);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.answer-logger .al-record-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.answer-logger tbody tr.al-recorded .al-record-btn {
+  border-color: var(--al-green);
+  background: var(--al-green);
+  color: #fff;
+}
+
+.answer-logger .al-empty {
+  padding: 48px 20px;
+  color: var(--al-muted);
+  text-align: center;
+}
+
+.answer-logger .al-log-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.answer-logger .al-add-line {
+  padding: 10px 14px;
+  border: 1px dashed #9fb4c6;
+  background: #f7fafc;
+  color: var(--al-navy);
+  font-size: 13px;
+}
+
+.answer-logger .al-add-line:hover {
+  border-style: solid;
+  border-color: var(--al-blue);
+  color: var(--al-blue);
+}
+
+.answer-logger .al-danger-link {
+  padding: 4px 0;
+  background: transparent;
+  color: #9b3741;
+  font-size: 12px;
+}
+
+@media (max-width: 980px) {
+  .answer-logger .al-workspace {
+    grid-template-columns: 1fr;
+  }
+  .answer-logger header {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 560px) {
+  .answer-logger .al-shell {
+    padding: 20px 4px 32px;
+  }
+  .answer-logger header {
+    display: block;
+  }
+  .answer-logger .al-stats {
+    margin-top: 18px;
+    flex-wrap: wrap;
+  }
+  .answer-logger .al-stat {
+    flex: 1;
+    min-width: 130px;
+  }
+  .answer-logger form.al-card {
+    grid-template-columns: 1fr;
+    padding: 16px;
+  }
+  .answer-logger #alTimer {
+    font-size: 40px;
+  }
+  .answer-logger .al-log-card {
+    padding: 16px;
+  }
+  .answer-logger .al-log-heading {
+    align-items: flex-start;
+  }
+  .answer-logger .al-paper-cell {
+    display: none;
+  }
+  .answer-logger thead th:first-child {
+    display: none;
+  }
+}

@@ -68,6 +68,11 @@ body {
   color: var(--success-text);
 }
 
+.banner-error {
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+
 .mode-switch {
   display: flex;
   flex-wrap: wrap;

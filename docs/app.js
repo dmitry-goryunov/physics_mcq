@@ -1,7 +1,11 @@
 (() => {
   "use strict";
 
-  const CACHE_NAME = "physics-mcq-cache-v25"; // keep in sync with sw.js
+  // Matches sw.js's ASSET_CACHE_NAME — deliberately NOT bumped when the app
+  // code updates, so a user's "Download for offline use" survives every
+  // future update instead of silently being wiped and needing a full
+  // multi-thousand-image re-fetch. See sw.js for the full explanation.
+  const ASSET_CACHE_NAME = "physics-mcq-assets-v1";
   const PROGRESS_KEY = "physics_mcq_offline_progress_v1";
   const INCORRECT_KEY = "physics_mcq_offline_incorrect_v1";
   const OVERRIDES_KEY = "physics_mcq_offline_overrides_v1";
@@ -18,6 +22,7 @@
     progressTable: document.getElementById("progress-table"),
     banner: document.getElementById("offline-banner"),
     modeSwitch: document.getElementById("mode-switch"),
+    answerLogger: document.getElementById("answer-logger-section"),
   };
 
   /** @type {any} */
@@ -72,6 +77,7 @@
   let docAnnotateSaveDebounce = null;
 
   const MODE_QUIZ = "quiz";
+  const MODE_ANSWER_LOGGER = "answer_logger";
   const DOC_BASE_HEIGHT_VH = 78;
 
   const state = {
@@ -203,7 +209,19 @@
   async function loadAssetManifest() {
     try {
       const response = await fetch("asset-manifest.json");
-      ASSET_MANIFEST = await response.json();
+      const manifest = await response.json();
+      // The manifest also lists the core app-shell files (index.html,
+      // app.js, ...) alongside the question/document images, but those are
+      // already guaranteed cached by the service worker's own install step,
+      // into CORE_CACHE_NAME. "Download for offline use" below must only
+      // ever write images into ASSET_CACHE_NAME — writing shell files there
+      // too would leave a stale duplicate sitting in the asset cache after
+      // every future update (since that cache is deliberately never
+      // cleared), which caches.match() could end up serving instead of the
+      // fresh one in CORE_CACHE_NAME.
+      ASSET_MANIFEST = manifest.filter(
+        (path) => path.startsWith("img/") || path.startsWith("doc_img/")
+      );
     } catch (err) {
       ASSET_MANIFEST = [];
     }
@@ -1185,12 +1203,22 @@
     if (state.appMode === MODE_QUIZ) {
       els.sidebar.style.display = "";
       els.progressSection.style.display = "";
+      els.answerLogger.hidden = true;
       renderSidebar();
       renderMain();
       renderProgressTable();
+    } else if (state.appMode === MODE_ANSWER_LOGGER) {
+      els.sidebar.style.display = "none";
+      els.progressSection.style.display = "none";
+      els.main.innerHTML = "";
+      els.answerLogger.hidden = false;
+      // The Answer Logger's own script (answer-logger.js) owns everything
+      // inside #answer-logger-section from here — it's a separate,
+      // self-contained tool, not part of this render cycle.
     } else {
       els.sidebar.style.display = "none";
       els.progressSection.style.display = "none";
+      els.answerLogger.hidden = true;
       renderDocumentView();
     }
   }
@@ -1202,6 +1230,7 @@
       }" data-action="select-mode-app" data-mode="${id}">${escapeHtml(label)}</button>`;
     els.modeSwitch.innerHTML =
       buttonHtml(MODE_QUIZ, "Physics MCQ") +
+      buttonHtml(MODE_ANSWER_LOGGER, "Answer Logger") +
       DOCUMENTS.map((doc) => buttonHtml(doc.id, doc.title)).join("");
   }
 
@@ -2176,7 +2205,7 @@
       return;
     }
     try {
-      const cache = await caches.open(CACHE_NAME);
+      const cache = await caches.open(ASSET_CACHE_NAME);
       const keys = await cache.keys();
       const cachedUrls = new Set(keys.map((r) => new URL(r.url).pathname.split("/").pop()));
       let cachedCount = 0;
@@ -2192,32 +2221,50 @@
     renderSidebar();
   }
 
+  // A failed fetch (e.g. a flaky or filtered connection dropping a request
+  // mid-download) used to still count toward "cached" and the flow always
+  // ended with a success banner — meaning a partial, broken download looked
+  // identical to a complete one. Failures are now tracked separately, the
+  // progress count only reflects assets that actually landed in the cache,
+  // and the closing message says so honestly instead of always claiming
+  // success.
   async function downloadForOffline() {
     if (!("caches" in window) || state.offline.downloading) return;
     state.offline.downloading = true;
     renderSidebar();
 
-    const cache = await caches.open(CACHE_NAME);
+    const cache = await caches.open(ASSET_CACHE_NAME);
     const CONCURRENCY = 8;
     let index = 0;
     let cached = state.offline.cached;
+    let failed = 0;
     let lastRender = 0;
 
     async function worker() {
       while (index < ASSET_MANIFEST.length) {
         const path = ASSET_MANIFEST[index];
         index += 1;
+        let ok = false;
         try {
           const existing = await cache.match(path);
-          if (!existing) {
+          if (existing) {
+            ok = true;
+          } else {
             const response = await fetch(path);
-            if (response.ok) await cache.put(path, response);
+            if (response.ok) {
+              await cache.put(path, response);
+              ok = true;
+            }
           }
         } catch (err) {
-          // skip failed asset, continue
+          // network error — counted as a failure below, not silently skipped
         }
-        cached += 1;
-        state.offline.cached = cached;
+        if (ok) {
+          cached += 1;
+          state.offline.cached = cached;
+        } else {
+          failed += 1;
+        }
         const now = Date.now();
         if (now - lastRender > 200) {
           lastRender = now;
@@ -2229,7 +2276,15 @@
     await Promise.all(Array.from({ length: CONCURRENCY }, worker));
     state.offline.downloading = false;
     renderSidebar();
-    showBanner("success", "Offline content ready. You can now use this app without a network connection.", 5000);
+    if (failed > 0) {
+      showBanner(
+        "error",
+        `Offline download incomplete: ${failed} of ${ASSET_MANIFEST.length} files failed (likely a network issue). Tap "Download for offline use" again to retry just the missing ones.`,
+        8000
+      );
+    } else {
+      showBanner("success", "Offline content ready. You can now use this app without a network connection.", 5000);
+    }
   }
 
   function installApp() {

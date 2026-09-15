@@ -10,6 +10,7 @@
   <link rel="icon" href="icons/icon-192.png" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="answer-logger.css" />
 </head>
 <body>
   <div class="app">
@@ -33,8 +34,75 @@
       <h2>Progress by topic</h2>
       <div id="progress-table"></div>
     </section>
+
+    <section id="answer-logger-section" class="answer-logger" hidden>
+      <main class="al-shell">
+        <header>
+          <div>
+            <p class="al-eyebrow">PAST-PAPER PRACTICE</p>
+            <h1>Answer Logger</h1>
+            <p class="al-intro">Type the paper, add a question range, then click a row to highlight it. The clock runs while a question is highlighted; fill in the answer and notes, then record it.</p>
+          </div>
+          <div class="al-stats">
+            <div class="al-stat"><span id="alAttemptCount">0</span><small>questions recorded</small></div>
+            <div class="al-stat"><span id="alTotalTime">00:00</span><small>total time</small></div>
+          </div>
+        </header>
+
+        <section class="al-workspace">
+          <form id="alRangeForm" class="al-card" autocomplete="off">
+            <div class="al-field al-full">
+              <label for="alPaper">Paper</label>
+              <input id="alPaper" list="alPaperList" type="text" placeholder="Type a paper name, e.g. TMUA 2016 Paper 1" required>
+              <datalist id="alPaperList"></datalist>
+            </div>
+            <div class="al-field">
+              <label for="alQuestionFrom">Question from</label>
+              <input id="alQuestionFrom" type="text" value="1" maxlength="4" autocapitalize="characters" spellcheck="false" placeholder="1 or A" required>
+            </div>
+            <div class="al-field">
+              <label for="alQuestionTo">Question to</label>
+              <input id="alQuestionTo" type="text" value="20" maxlength="4" autocapitalize="characters" spellcheck="false" placeholder="20 or J" required>
+            </div>
+            <button class="al-submit al-full" type="submit">Add questions to log</button>
+            <p id="alStatus" class="al-status al-full" aria-live="polite"></p>
+            <div class="al-timer-panel al-full">
+              <span class="al-timer-label" id="alTimerLabel">NO QUESTION HIGHLIGHTED</span>
+              <output id="alTimer">00:00.0</output>
+              <div class="al-timer-actions">
+                <button id="alStartPause" type="button" disabled>Start timer</button>
+                <button id="alResetTimer" class="al-ghost" type="button" disabled>Reset</button>
+              </div>
+            </div>
+            <p class="al-hint al-full">Questions can be numbers (1 to 20) or letters (A to J); use the same kind in both boxes. Click a row to highlight it and start its clock; click it again to pause. Tab and Shift+Tab move the highlight between rows as well. A question can be highlighted as many times as you like and the times add up.</p>
+          </form>
+
+          <aside class="al-card al-log-card">
+            <div class="al-log-heading">
+              <div><p class="al-eyebrow">WORKSHEET</p><h2>Answer log</h2></div>
+              <div class="al-log-heading-actions">
+                <button id="alEmailResults" class="al-secondary" type="button">Email results</button>
+                <button id="alExportCsv" class="al-secondary" type="button">Export for Excel</button>
+              </div>
+            </div>
+            <div class="al-table-wrap">
+              <table>
+                <thead><tr><th>Paper</th><th>Q</th><th>Answer</th><th>Notes</th><th>Time</th><th>Total</th><th></th></tr></thead>
+                <tbody id="alLogBody"></tbody>
+              </table>
+              <p id="alEmptyState" class="al-empty">No questions yet. Add a question range on the left.</p>
+            </div>
+            <div class="al-log-footer">
+              <button id="alAddLine" class="al-add-line" type="button">+ Add another line</button>
+              <button id="alClearLog" class="al-danger-link" type="button">Clear saved log</button>
+            </div>
+          </aside>
+        </section>
+      </main>
+    </section>
   </div>
 
   <script src="app.js"></script>
+  <script src="answer-logger.js"></script>
 </body>
 </html>
